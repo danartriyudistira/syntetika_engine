@@ -1,0 +1,43 @@
+{
+  "name": "syntetika-engine",
+  "productName": "Syntetika Engine",
+  "version": "1.0.0",
+  "description": "Browser-based DAW with AI composition, WebGL visuals, and MIDI hardware support",
+  "main": "electron-main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build:dir": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "com.syntetika.engine",
+    "productName": "Syntetika Engine",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist",
+      "!node_modules/**/*"
+    ],
+    "nodeGypRebuild": false,
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "Syntetika Engine"
+    }
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "license": "MIT"
+}
