@@ -1,0 +1,26 @@
+/*{
+  "CATEGORIES": ["Audio"],
+  "INPUTS": [
+    {"NAME": "speed", "TYPE": "float", "MIN": 0.1, "MAX": 4, "DEFAULT": 1}
+  ]
+}*/
+void main() {
+    vec2 uv = (gl_FragCoord.xy - 0.5 * RENDERSIZE) / min(RENDERSIZE.x, RENDERSIZE.y);
+    float angle = atan(uv.y, uv.x);
+    float radius = length(uv);
+    float melTrigger = u_trigger_melody;
+    float pitchFactor = u_note_pitch * 5.0 + 0.5;
+    float spiral = sin(angle * 4.0 * pitchFactor + radius * 12.0 - TIME * 3.0 * speed + u_mid * 4.0 + melTrigger * 6.0) * 0.5 + 0.5;
+    float glow = exp(-radius * 2.0);
+    vec3 col = mix(
+        vec3(0.4 + melTrigger * 0.6, 0.0 + melTrigger * 0.4, 0.4),
+        vec3(0.0, 0.6 + melTrigger * 0.4, 0.8 + melTrigger * 0.2),
+        spiral + u_high * 0.3
+    );
+    col *= glow + u_high * 0.4 + melTrigger * 0.6;
+    col += vec3(0.2, 0.0, 0.3) * u_mid * glow;
+    vec2 spikeUv = uv * (1.0 + melTrigger * 0.5);
+    float spike = exp(-length(spikeUv) * 4.0) * melTrigger * 1.5;
+    col += vec3(1.0, 0.8, 0.2) * spike;
+    gl_FragColor = vec4(col, 1.0);
+}

@@ -1,0 +1,9 @@
+[
+  {"id": "plasma", "name": "Plasma", "file": "plasma.isf", "categories": ["Plasma"]},
+  {"id": "simply-nebulous", "name": "Simply Nebulous", "file": "simply-nebulous.isf", "categories": ["Fractal"]},
+  {"id": "audio-visualizer", "name": "Audio Visualizer", "file": "audio-visualizer.isf", "categories": ["Audio"]},
+  {"id": "drum-pulse", "name": "Drum Pulse", "file": "drum-pulse.isf", "categories": ["Audio"]},
+  {"id": "bass-wave", "name": "Bass Wave", "file": "bass-wave.isf", "categories": ["Audio"]},
+  {"id": "melody-spiral", "name": "Melody Spiral", "file": "melody-spiral.isf", "categories": ["Audio"]},
+  {"id": "mono-strobe", "name": "Mono Strobe", "file": "mono-strobe.isf", "categories": ["Audio"]}
+]

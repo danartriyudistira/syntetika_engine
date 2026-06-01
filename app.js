@@ -1,0 +1,3463 @@
+import { AudioEngine } from "./src/core/audio.js";
+import { MidiManager } from "./src/core/midi.js";
+import { MatrixControlManager } from "./src/core/matrix-control.js";
+import {
+    hideNotePicker as hideNotePickerUi,
+    notePickerContext,
+    openNotePicker,
+    renderNotePicker as renderNotePickerUi
+} from "./src/core/note-picker-ui.js";
+import { renderScalePicker as renderScalePickerUi } from "./src/core/scale-picker-ui.js";
+import {
+    channelMatches,
+    drumIndexFromTrack,
+    loadMidiConfig,
+    renderMidiUI as renderMidiPanel,
+    saveMidiConfig
+} from "./src/core/midi-ui.js";
+import { Randomizer } from "./src/core/randomizer.js";
+import { SequencerEngine } from "./src/core/sequencer.js";
+import { loadState, saveState as persistState } from "./src/core/state.js";
+import {
+    ResolumeController,
+    normalizeResolumeConfig
+} from "./src/core/resolume.js";
+import {
+    BANK_COUNT,
+    BASS_SOUND_STYLES,
+    DRUM_SOUND_STYLES,
+    MELODY_SOUND_STYLES,
+    NOTE_STEP_COUNT,
+    OTHER_SOUND_STYLES,
+    PRESET_COUNT,
+    SEQUENCER_MODES,
+    activeBankFor as selectActiveBank,
+    activePattern as selectActivePattern,
+    activeSlotFor as selectActiveSlot,
+    getLoopLength as selectLoopLength,
+    setLoopLength as assignLoopLength,
+    getTrackRate as selectTrackRate,
+    setTrackRate as assignTrackRate,
+    setActivePattern as assignActivePattern
+} from "./src/core/pattern-store.js";
+import {
+    CHANNEL,
+    DRUM_LANE_VOICE_OPTIONS,
+    DRUM_LABELS,
+    DRUM_RANDOM_GENRES,
+    DRUM_VOICE_INDEX,
+    DRUM_VOICE_ORDER,
+    DRUM_VOICES,
+    MATRIX_CHANNEL,
+    MIDI_NOTE_NAMES,
+    NOTE_PICKER_MAX_MIDI,
+    NOTE_PICKER_MIN_MIDI,
+    PITCH_GENERATOR_MODES,
+    PITCH_GENERATOR_ROLES,
+    PITCH_GENERATOR_STYLES,
+    PITCH_GENERATOR_STYLE_LABELS,
+    SCALE_DEFINITIONS,
+    STORAGE_KEY,
+} from "./src/core/constants.js";
+import { $, $$, pulseButton as flashButton, setEngineState as setEngineStateText } from "./src/core/ui.js";
+import { clamp, generateNoteNames, isNoteName, midiNoteName, noteNameToMidi } from "./src/core/utils.js";
+import { ShaderEngine } from "./src/core/shader-engine.js";
+import { ShaderEditor } from "./src/core/shader-editor.js";
+import { AIBridge } from "./src/core/ai-bridge.js";
+import { AIEngine } from "./src/core/ai-engine.js";
+import { generateWelcomeMessage } from "./src/core/ai-personality.js";
+
+(async () => {
+    "use strict";
+
+    if (!window.performance) {
+        window.performance = { now: () => Date.now() };
+    }
+
+    const els = {
+        body: document.body,
+        app: $("#app-container"),
+        leftPanelToggle: $("#left-panel-toggle"),
+        rightPanelToggle: $("#right-panel-toggle"),
+        fileMenuToggle: $("#file-menu-toggle"),
+        fileMenu: $("#file-menu"),
+        projectOpenInput: $("#project-open-input"),
+        playBtn: $("#playBtn"),
+        bpmVal: $("#bpmVal"),
+        bpmDownBtn: $("#bpmDownBtn"),
+        bpmUpBtn: $("#bpmUpBtn"),
+        tapTempoBtn: $("#tapTempoBtn"),
+        resyncBtn: $("#resyncBtn"),
+        nudgeDownBtn: $("#nudgeDownBtn"),
+        nudgeUpBtn: $("#nudgeUpBtn"),
+        engineState: $("#engine-state"),
+        grid: $("#grid-container"),
+        canvasContainer: $("#canvas-container"),
+        drumBarControls: $("#drum-bar-controls"),
+        noteBarControls: $("#note-bar-controls"),
+        moduleTitle: $("#module-title"),
+        patternMatrixTitle: $("#pattern-matrix-title"),
+        patternMatrixHost: $("#pattern-matrix-host"),
+        uiModeBtns: $("#ui-mode-btns"),
+        internalAudioBtns: $("#internal-audio-btns"),
+        visualToggle: $("#visual-toggle"),
+        fpsCounter: $("#fps-counter"),
+        popupVisualBtn: $("#popup-visual-btn"),
+        aspectToggle: $("#aspect-toggle"),
+        aspectMenu: $("#aspect-menu"),
+        audioSoundSummaryBtn: $("#audio-sound-summary-btn"),
+        audioSoundDetail: $("#audio-sound-detail"),
+        audioMixerSummaryBtn: $("#audio-mixer-summary-btn"),
+        audioMixerDetail: $("#audio-mixer-detail"),
+        mixerInputs: $$("[data-mixer]"),
+        mixerValues: $$("[data-mixer-value]"),
+        drumSoundBtns: $("#drum-sound-btns"),
+        bassSoundBtns: $("#bass-sound-btns"),
+        melodySoundBtns: $("#melody-sound-btns"),
+        otherSoundBtns: $("#other-sound-btns"),
+        bankBtns: $("#bank-btns"),
+        presetBtns: $("#preset-btns"),
+        randomBtn: $("#randomBtn"),
+        scaleBtn: $("#scaleBtn"),
+        scalePopup: $("#scale-popup"),
+        scaleClose: $("#scale-close"),
+        scaleRootBtns: $("#scale-root-btns"),
+        scaleOptionList: $("#scale-option-list"),
+        randomRoleBtns: $("#random-role-btns"),
+        trackRateBtns: $("#track-rate-btns"),
+        pitchGeneratorPanel: $("#pitch-generator-panel"),
+        generatorSummaryBtn: $("#generator-summary-btn"),
+        generatorDetail: $("#generator-detail"),
+        generatorModeBtns: $("#generator-mode-btns"),
+        generatorRoleBtns: $("#generator-role-btns"),
+        generatorStyleBtns: $("#generator-style-btns"),
+        pitchToolBtns: $("#pitch-tool-btns"),
+        clearBtn: $("#clearBtn"),
+        copyBtn: $("#copyBtn"),
+        pasteBtn: $("#pasteBtn"),
+        modeBtns: $$(".btn-mode"),
+        midiModal: $("#midi-modal"),
+        midiPanic: $("#midi-panic"),
+        midiClose: $("#midi-close"),
+        midiDeviceRouting: $("#midi-device-routing"),
+        midiMapSummaryBtn: $("#midi-map-summary-btn"),
+        midiMapDetail: $("#midi-map-detail"),
+        midiRows: $("#midi-mapping-rows"),
+        midiStatus: $("#midi-status"),
+        resolumeSummaryBtn: $("#resolume-summary-btn"),
+        resolumeDetail: $("#resolume-detail"),
+        resolumeEnabled: $("#resolume-enabled"),
+        resolumeHost: $("#resolume-host"),
+        resolumePort: $("#resolume-port"),
+        resolumeTestBtn: $("#resolume-test-btn"),
+        resolumeDetectBtn: $("#resolume-detect-btn"),
+        resolumeMatrixTrigger: $("#resolume-matrix-trigger"),
+        resolumeDeckTrigger: $("#resolume-deck-trigger"),
+        resolumeDashboardPulse: $("#resolume-dashboard-pulse"),
+        resolumePulseAmount: $("#resolume-pulse-amount"),
+        resolumePulseLength: $("#resolume-pulse-length"),
+        resolumePulseDebounce: $("#resolume-pulse-debounce"),
+        resolumeOscHost: $("#resolume-osc-host"),
+        resolumeOscPort: $("#resolume-osc-port"),
+        resolumeOscBridgeUrl: $("#resolume-osc-bridge-url"),
+        resolumeClipTargetBtns: $$("[data-resolume-clip-target]"),
+        resolumeStatus: $("#resolume-status"),
+        notePicker: $("#note-picker"),
+        canvas: $("#visual-canvas"),
+        shaderEditorModal: $("#shader-editor-modal"),
+        shaderEditorHost: $("#shader-editor-host"),
+        shaderGalleryHost: $("#shader-gallery-host")
+    };
+
+    const isMonitor = new URLSearchParams(location.search).get("monitor") === "1";
+
+    let state = loadState();
+    let midiConfig = loadMidiConfig();
+    let audio = null;
+    let sequencer = null;
+    let randomizer = null;
+    let copiedPattern = null;
+    let learningTrack = null;
+    let leftPanelCollapsed = false;
+    let rightPanelCollapsed = false;
+    let audioSoundPanelOpen = false;
+    let audioMixerPanelOpen = false;
+    let resolumePanelOpen = false;
+    let shaderEngine = null;
+    let shaderEditor = null;
+    let midiMapPanelOpen = false;
+    let midi = null;
+    let resolume = null;
+    let matrixControl = null;
+    let tapTimes = [];
+    let saveStateTimer = null;
+    let patternEditGesture = null;
+    let popupVisualWindow = null;
+    let popupVisualActive = false;
+    let popupVisualAliveCheck = null;
+    let popupVisualReadyTimeout = null;
+    let lastSequencerErrorAt = 0;
+    let generatorPanelOpen = false;
+    const SAVE_STATE_DEBOUNCE_MS = 350;
+
+    resolume = new ResolumeController(state.resolume, setResolumeStatus);
+
+
+    function saveState(options = {}) {
+        const {
+            immediate = false
+        } = options;
+
+        if (immediate) {
+            flushSaveState();
+            return;
+        }
+
+        if (saveStateTimer) window.clearTimeout(saveStateTimer);
+        saveStateTimer = window.setTimeout(() => {
+            saveStateTimer = null;
+            persistState(state);
+        }, SAVE_STATE_DEBOUNCE_MS);
+    }
+
+     function flushSaveState() {
+         if (saveStateTimer) {
+             window.clearTimeout(saveStateTimer);
+             saveStateTimer = null;
+         }
+         // Validate state before saving
+         if (validatePatternMatrixData(state)) {
+             persistState(state);
+         } else {
+             console.error("Failed to save state: Invalid pattern matrix data");
+             setEngineState("Save failed - invalid data");
+         }
+     }
+
+    function syncMatrixState() {
+        matrixControl?.syncState();
+    }
+
+    function activePattern(kind) {
+        return selectActivePattern(state, kind);
+    }
+
+    function setActivePattern(kind, pattern) {
+        assignActivePattern(state, kind, pattern);
+    }
+
+    function getLoopLength(kind) {
+        return selectLoopLength(state, kind);
+    }
+
+    function selectorValue(value, max) {
+        const number = Number(value);
+        return Number.isFinite(number) ? clamp(Math.trunc(number), 0, max - 1) : null;
+    }
+
+    function activeBankFor(kind = state.mode) {
+        return selectActiveBank(state, kind);
+    }
+
+    function activeSlotFor(kind = state.mode) {
+        return selectActiveSlot(state, kind);
+    }
+
+    function saveMidi() {
+        saveMidiConfig(midiConfig);
+    }
+
+    function updateShaderAudio() {
+        if (!audio) return;
+        const freqData = audio.getFrequencyData?.();
+        if (!freqData) return;
+        if (shaderEngine) shaderEngine.setAudioData(freqData);
+        if (shaderEditor?.previewEngine) shaderEditor.previewEngine.setAudioData(freqData);
+        if (popupVisualActive) sendToPopupVisual({ type: 'audio', ...freqData });
+    }
+
+    async function initShaders() {
+        const canvas = els.canvas;
+        if (!canvas) return;
+        shaderEngine = new ShaderEngine();
+        if (!shaderEngine.init(canvas)) {
+            setEngineState("WebGL not available");
+            return;
+        }
+        shaderEngine.onFpsUpdate = (fps) => {
+            if (els.fpsCounter) els.fpsCounter.textContent = fps + " FPS";
+        };
+        if (!state.visualEnabled) shaderEngine.setEnabled(false);
+        shaderEditor = new ShaderEditor({
+            onSwitch: (id) => {
+                const shader = shaderEditor.getShaderById(id);
+                if (shader && shaderEngine) {
+                    shaderEngine.compileShader(shader.source);
+                }
+                state.activeShaderId = id;
+                saveState();
+                bindShaderControls();
+                updateVisualPresetStatus();
+            },
+            onShadersChange: () => {
+                if (els.shaderGalleryHost) shaderEditor.renderGallery(els.shaderGalleryHost);
+            }
+        });
+        await shaderEditor.init();
+        if (els.shaderGalleryHost) shaderEditor.renderGallery(els.shaderGalleryHost);
+        shaderEngine.startLoop();
+        setInterval(updateShaderAudio, 50);
+    }
+
+    function sendToPopupVisual(data) {
+        if (popupVisualWindow && popupVisualActive) {
+            try {
+                popupVisualWindow.postMessage(data, '*');
+            } catch {}
+        }
+    }
+
+    function openPopupVisual() {
+        if (popupVisualActive || !shaderEngine || !shaderEditor) return;
+        const popup = window.open('popup-visual.html', 'SyntetikaVisual', 'width=960,height=640');
+        if (!popup) {
+            setEngineState('Popup blocked');
+            return;
+        }
+        popupVisualWindow = popup;
+        popupVisualActive = true;
+
+        if (shaderEngine) shaderEngine.setEnabled(false);
+        els.body?.classList.add('popup-visual-mode');
+        applyStateToUI();
+
+        window.addEventListener('message', handlePopupVisualMessage);
+
+        popupVisualAliveCheck = setInterval(() => {
+            if (popupVisualWindow && popupVisualWindow.closed) {
+                closePopupVisual();
+                return;
+            }
+            sendToPopupVisual({ type: 'ping' });
+        }, 3000);
+
+        popupVisualReadyTimeout = setTimeout(() => {
+            if (popupVisualActive) {
+                setEngineState('Popup visual did not respond');
+                closePopupVisual();
+            }
+        }, 5000);
+    }
+
+    function handlePopupVisualMessage(event) {
+        if (event.source !== popupVisualWindow) return;
+        const data = event.data;
+        if (!data || !data.type) return;
+        if (data.type === 'popup-closed') {
+            closePopupVisual();
+        } else if (data.type === 'popup-ready') {
+            if (popupVisualReadyTimeout) {
+                clearTimeout(popupVisualReadyTimeout);
+                popupVisualReadyTimeout = null;
+            }
+            const shader = shaderEditor?.getActiveShader();
+            sendToPopupVisual({
+                type: 'init',
+                shaderSource: shader?.source || null,
+                params: shaderEngine ? { ...shaderEngine.params } : {}
+            });
+        }
+    }
+
+    function closePopupVisual() {
+        if (!popupVisualActive) return;
+        popupVisualActive = false;
+
+        if (popupVisualAliveCheck) {
+            clearInterval(popupVisualAliveCheck);
+            popupVisualAliveCheck = null;
+        }
+        if (popupVisualReadyTimeout) {
+            clearTimeout(popupVisualReadyTimeout);
+            popupVisualReadyTimeout = null;
+        }
+
+        if (popupVisualWindow && !popupVisualWindow.closed) {
+            try {
+                popupVisualWindow.postMessage({ type: 'close' }, '*');
+                popupVisualWindow.close();
+            } catch {}
+        }
+        popupVisualWindow = null;
+
+        window.removeEventListener('message', handlePopupVisualMessage);
+
+        els.body?.classList.remove('popup-visual-mode');
+
+        if (shaderEngine && state.visualEnabled) {
+            shaderEngine.setEnabled(true);
+        }
+        applyStateToUI();
+    }
+
+    function renderTriggerPopup(paramName, popupEl) {
+        const TRIGGER_SOURCES = [
+            { id: "", label: "—" },
+            { id: "kick", label: "Kick" },
+            { id: "snare", label: "Snare" },
+            { id: "hat", label: "Hat" },
+            { id: "clap", label: "Clap" },
+            { id: "bass", label: "Bass" },
+            { id: "melody", label: "Melody" },
+            { id: "mono", label: "Mono" },
+        ];
+        const def = getParamDef(paramName);
+        const current = midiConfig.shaderTriggers?.find((m) => m.paramName === paramName);
+        popupEl.innerHTML = `
+            <div class="trigger-popup-header">Trigger Source</div>
+            <div class="trigger-popup-list">
+                ${TRIGGER_SOURCES.map((s) => `
+                    <button class="trigger-popup-item${current?.source === s.id ? " active" : ""}" data-source="${s.id}" type="button">${s.label}</button>
+                `).join("")}
+            </div>
+            ${current?.source ? `
+            <div class="trigger-popup-invert">
+                <button class="trigger-popup-item invert-btn${current.reverse ? " active" : ""}" data-invert type="button">↕ Invert</button>
+            </div>` : ""}
+        `;
+        popupEl.querySelectorAll(".trigger-popup-item").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const source = btn.dataset.source;
+                const existing = midiConfig.shaderTriggers.find((m) => m.paramName === paramName);
+                if (source) {
+                    if (existing) {
+                        existing.source = source;
+                    } else {
+                        midiConfig.shaderTriggers.push({ paramName, source, rangeStart: def.min, rangeMax: def.max, reverse: false });
+                    }
+                } else {
+                    if (existing) {
+                        midiConfig.shaderTriggers = midiConfig.shaderTriggers.filter((m) => m.paramName !== paramName);
+                    }
+                }
+                saveMidi();
+                bindShaderControls();
+            });
+        });
+        const invBtn = popupEl.querySelector("[data-invert]");
+        if (invBtn) {
+            invBtn.addEventListener("click", () => {
+                const mapping = midiConfig.shaderTriggers.find((m) => m.paramName === paramName);
+                if (mapping) {
+                    mapping.reverse = !mapping.reverse;
+                    invBtn.classList.toggle("active");
+                    saveMidi();
+                }
+            });
+        }
+    }
+
+    function bindShaderControls() {
+        const container = $("#shader-controls");
+        if (!container) return;
+
+        function rebuild() {
+            const shader = shaderEditor?.getActiveShader();
+            if (!shader) return;
+            const engine = shaderEngine;
+            if (!engine) return;
+            const inputs = engine.getInputDefs();
+            const params = engine.params;
+
+            container.innerHTML = inputs.map((inp, i) => {
+                const id = "sp-" + i;
+                const val = params[inp.name] ?? inp.def;
+                const trigger = midiConfig.shaderTriggers?.find((m) => m.paramName === inp.name);
+                const triggerLabel = trigger ? trigger.source : "M";
+
+                function valDisplay(v) {
+                    if (inp.type === 'color') return `R:${Number(v[0]).toFixed(2)} G:${Number(v[1]).toFixed(2)} B:${Number(v[2]).toFixed(2)} A:${Number(v[3]).toFixed(2)}`;
+                    if (inp.type === 'point2D') return `X:${Number(v[0]).toFixed(3)} Y:${Number(v[1]).toFixed(3)}`;
+                    return Number(v).toFixed(3);
+                }
+
+                if (trigger) {
+                    const rs = trigger.rangeStart ?? inp.min;
+                    const rm = trigger.rangeMax ?? inp.max;
+                    const rMin = inp.min, rMax = inp.max, rSpan = rMax - rMin || 1;
+                    const fillL = ((Math.min(rs, rm) - rMin) / rSpan) * 100;
+                    const fillR = ((rMax - Math.max(rs, rm)) / rSpan) * 100;
+                    const curPct = ((val - rMin) / rSpan) * 100;
+                    return `<div class="shader-control-row" style="position:relative">
+                        <label>${inp.name}</label>
+                        <div class="dual-range-ctrl" data-param="${inp.name}">
+                            <div class="dual-range-track">
+                                <div class="dual-range-fill" style="left:${fillL}%;right:${fillR}%"></div>
+                                <div class="dual-range-current" data-param="${inp.name}" style="left:${curPct}%"></div>
+                            </div>
+                            <input type="range" class="dual-range-thumb idle-knob" data-target="rangeStart" min="${rMin}" max="${rMax}" step="${rSpan / 1000}" value="${rs}">
+                            <input type="range" class="dual-range-thumb peak-knob" data-target="rangeMax" min="${rMin}" max="${rMax}" step="${rSpan / 1000}" value="${rm}">
+                        </div>
+                        <span class="shader-control-val" data-param="${inp.name}">${valDisplay(val)}</span>
+                        <button class="mini-btn shader-trigger-btn linked" data-trigger-param="${inp.name}" type="button">${triggerLabel}</button>
+                    </div>`;
+                }
+
+                if (inp.values && inp.values.length > 0) {
+                    const labels = inp.labels || inp.values;
+                    return `<div class="shader-control-row" style="position:relative">
+                        <label for="${id}">${inp.name}</label>
+                        <select id="${id}" class="shader-select">
+                            ${inp.values.map((v, vi) => `
+                                <option value="${v}" ${v === val ? 'selected' : ''}>${labels[vi] ?? v}</option>
+                            `).join('')}
+                        </select>
+                        <span class="shader-control-val" id="${id}-val">${valDisplay(val)}</span>
+                        <button class="mini-btn shader-trigger-btn" data-trigger-param="${inp.name}" type="button">${triggerLabel}</button>
+                    </div>`;
+                }
+
+                if (inp.type === 'color') {
+                    const labels = ['R','G','B','A'];
+                    return `<div class="shader-control-row" style="position:relative">
+                        <label>${inp.name}</label>
+                        <div class="shader-vec-controls" data-param="${inp.name}" data-type="color">
+                            ${labels.map((l, ci) => `
+                                <div class="shader-vec-slot">
+                                    <span class="vec-label">${l}</span>
+                                    <input type="range" id="${id}-${ci}" min="${inp.min}" max="${inp.max}" step="0.01" value="${val[ci]}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <span class="shader-control-val" data-param="${inp.name}">${valDisplay(val)}</span>
+                    </div>`;
+                }
+
+                if (inp.type === 'point2D') {
+                    const labels = ['X','Y'];
+                    return `<div class="shader-control-row" style="position:relative">
+                        <label>${inp.name}</label>
+                        <div class="shader-vec-controls" data-param="${inp.name}" data-type="point2D">
+                            ${labels.map((l, ci) => `
+                                <div class="shader-vec-slot">
+                                    <span class="vec-label">${l}</span>
+                                    <input type="range" id="${id}-${ci}" min="${inp.min}" max="${inp.max}" step="0.01" value="${val[ci]}">
+                                </div>
+                            `).join('')}
+                        </div>
+                        <span class="shader-control-val" data-param="${inp.name}">${valDisplay(val)}</span>
+                    </div>`;
+                }
+
+                return `<div class="shader-control-row" style="position:relative">
+                    <label for="${id}">${inp.name}</label>
+                    <input type="range" id="${id}" min="${inp.min}" max="${inp.max}" step="0.01" value="${val}">
+                    <span class="shader-control-val" id="${id}-val">${valDisplay(val)}</span>
+                    <button class="mini-btn shader-trigger-btn" data-trigger-param="${inp.name}" type="button">${triggerLabel}</button>
+                </div>`;
+            }).join("");
+
+            inputs.forEach((inp, i) => {
+                const id = "sp-" + i;
+                const trigger = midiConfig.shaderTriggers?.find((m) => m.paramName === inp.name);
+                if (trigger) {
+                    const ctrl = container.querySelector(`.dual-range-ctrl[data-param="${inp.name}"]`);
+                    const valEl = container.querySelector(`.shader-control-val[data-param="${inp.name}"]`);
+                    const idleKnob = ctrl?.querySelector(".idle-knob");
+                    const peakKnob = ctrl?.querySelector(".peak-knob");
+                    [idleKnob, peakKnob].forEach((knob) => {
+                        if (!knob) return;
+                        knob.addEventListener("input", () => {
+                            const target = knob.dataset.target;
+                            let rs = parseFloat(ctrl.querySelector(".idle-knob").value);
+                            let rm = parseFloat(ctrl.querySelector(".peak-knob").value);
+                            const def = getParamDef(inp.name);
+                            const rMin = def.min, rMax = def.max;
+                            if (rs > rm) {
+                                if (target === "rangeStart") { rm = rs; ctrl.querySelector(".peak-knob").value = rm; }
+                                else { rs = rm; ctrl.querySelector(".idle-knob").value = rs; }
+                            }
+                            trigger.rangeStart = rs;
+                            trigger.rangeMax = rm;
+                            const current = target === "rangeStart" ? rs : rm;
+                            engine.setParam(inp.name, current);
+                            if (valEl) valEl.textContent = Number(current).toFixed(3);
+                            updateDualRangeFill(ctrl, rs, rm, current, rMin, rMax);
+                            if (paramDecayTimers[inp.name]) {
+                                clearInterval(paramDecayTimers[inp.name]);
+                                delete paramDecayTimers[inp.name];
+                            }
+                            saveMidi();
+                        });
+                    });
+                    if (valEl) {
+                        valEl.textContent = Number(params[inp.name] ?? inp.def).toFixed(3);
+                    }
+                } else if (inp.type === 'color' || inp.type === 'point2D') {
+                    const labels = inp.type === 'color' ? ['R','G','B','A'] : ['X','Y'];
+                    const n = labels.length;
+                    const vecCont = container.querySelector(`.shader-vec-controls[data-param="${inp.name}"]`);
+                    const valEl = container.querySelector(`.shader-control-val[data-param="${inp.name}"]`);
+                    if (vecCont) {
+                        for (let ci = 0; ci < n; ci++) {
+                            const slider = vecCont.querySelector(`#${id}-${ci}`);
+                            if (slider) {
+                                slider.addEventListener("input", () => {
+                                    const arr = [...(engine.params[inp.name] ?? inp.def)];
+                                    arr[ci] = parseFloat(slider.value);
+                                    engine.setParam(inp.name, arr);
+                                    if (valEl) {
+                                        const labels2 = inp.type === 'color' ? ['R','G','B','A'] : ['X','Y'];
+                                        valEl.textContent = arr.map((v, k) => `${labels2[k]}:${Number(v).toFixed(2)}`).join(' ');
+                                    }
+                                });
+                            }
+                        }
+                    }
+                } else {
+                    const slider = document.getElementById(id);
+                    const valEl = document.getElementById(id + "-val");
+                    if (slider) {
+                        slider.addEventListener("input", () => {
+                            const v = parseFloat(slider.value);
+                            if (valEl) valEl.textContent = v.toFixed(3);
+                            engine.setParam(inp.name, v);
+                            if (paramDecayTimers[inp.name]) {
+                                clearInterval(paramDecayTimers[inp.name]);
+                                delete paramDecayTimers[inp.name];
+                            }
+                        });
+                    }
+                }
+            });
+
+            container.querySelectorAll(".shader-trigger-btn").forEach((btn) => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    const existing = container.querySelector(".trigger-popup");
+                    if (existing) existing.remove();
+
+                    const popup = document.createElement("div");
+                    popup.className = "trigger-popup";
+                    btn.after(popup);
+                    renderTriggerPopup(btn.dataset.triggerParam, popup);
+                });
+            });
+
+            document.addEventListener("click", closeTriggerPopup, { once: true });
+        }
+
+        function updateDualRangeFill(ctrl, rs, rm, current, rMin, rMax) {
+            const fill = ctrl?.querySelector(".dual-range-fill");
+            const curEl = ctrl?.querySelector(".dual-range-current");
+            const span = (rMax - rMin) || 1;
+            const min = Math.min(rs, rm);
+            const max = Math.max(rs, rm);
+            if (fill) {
+                fill.style.left = ((min - rMin) / span * 100) + "%";
+                fill.style.right = ((rMax - max) / span * 100) + "%";
+            }
+            if (curEl) {
+                const pct = Math.max(0, Math.min(100, ((current - rMin) / span) * 100));
+                curEl.style.left = pct + "%";
+            }
+        }
+
+        function closeTriggerPopup(e) {
+            if (e.target.closest(".trigger-popup") || e.target.closest(".shader-trigger-btn")) return;
+            const popup = container.querySelector(".trigger-popup");
+            if (popup) popup.remove();
+            document.removeEventListener("click", closeTriggerPopup);
+        }
+
+        rebuild();
+        container._rebuildShaderControls = rebuild;
+    }
+
+    async function init() {
+        matrixControl = new MatrixControlManager({
+            channelName: MATRIX_CHANNEL,
+            getState: publicPerformanceState,
+            onCommand: handleMatrixCommand,
+            isControl: false
+        });
+        matrixControl.start();
+
+        if (isMonitor) {
+            document.body.classList.add("monitor-mode");
+            bindMonitorEvents();
+            await initShaders();
+            audio = new AudioEngine();
+            audio.setMixerLevels(state.mixer);
+            return;
+        }
+
+        mountWorkspaceLayout();
+        await initShaders();
+        audio = new AudioEngine();
+        audio.setMixerLevels(state.mixer);
+        randomizer = new Randomizer();
+        midi = new MidiManager({
+            onMessage: handleMidiMessage,
+            onStateChange: handleMidiStateChange
+        });
+        sequencer = new SequencerEngine({
+            getBpm: () => state.bpm,
+            getLoopLength,
+            getRate: (kind) => trackRate(kind),
+            onTick: runStep,
+            onError: handleSequencerError
+        });
+
+        const aiBridge = new AIBridge({
+            state,
+            randomizer,
+            audio,
+            sequencer,
+            commit: () => {
+                applyStateToUI();
+                renderGrid();
+                saveState();
+                syncMatrixState();
+            }
+        });
+        aiBridge.onAction((action) => {
+            if (action.type === "toggle-play") togglePlay();
+        });
+        window.__aiBridge = aiBridge;
+
+        const aiEngine = new AIEngine(aiBridge);
+        window.__aiEngine = aiEngine;
+        mountAIChat(aiEngine);
+        bindEvents();
+        applyStateToUI();
+        loadVisualFromPreset(activeSlotFor(state.mode));
+        updateVisualPresetStatus();
+        renderGrid();
+        renderNotePicker();
+        renderScalePicker();
+        initMIDI();
+    }
+
+    function mountWorkspaceLayout() {
+        if (els.patternMatrixHost && els.patternMatrixTitle && els.presetBtns) {
+            els.patternMatrixHost.append(els.patternMatrixTitle, els.presetBtns);
+        }
+    }
+
+    function bindMonitorEvents() {
+        document.addEventListener("keydown", handleGlobalShortcut);
+        document.addEventListener("keydown", handlePatternMatrixShortcut);
+        bindFileMenu();
+    }
+
+    function bindEvents() {
+        els.playBtn?.addEventListener("click", togglePlay);
+        els.bpmDownBtn?.addEventListener("click", () => setBpm(state.bpm - 1));
+        els.bpmUpBtn?.addEventListener("click", () => setBpm(state.bpm + 1));
+        els.tapTempoBtn?.addEventListener("click", tapTempo);
+        els.resyncBtn?.addEventListener("click", resyncTransport);
+        els.nudgeDownBtn?.addEventListener("click", () => nudgeTempo(-1));
+        els.nudgeUpBtn?.addEventListener("click", () => nudgeTempo(1));
+        els.leftPanelToggle?.addEventListener("click", () => toggleSidePanel("left"));
+        els.rightPanelToggle?.addEventListener("click", () => toggleSidePanel("right"));
+        bindFileMenu();
+
+        els.uiModeBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-ui-mode]");
+            if (button) switchUiMode(button.dataset.uiMode);
+        });
+
+        els.internalAudioBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-internal-audio]");
+            if (button) toggleInternalAudio(button.dataset.internalAudio);
+        });
+
+        els.audioSoundSummaryBtn?.addEventListener("click", () => {
+            audioSoundPanelOpen = !audioSoundPanelOpen;
+            applyStateToUI();
+        });
+
+        els.audioMixerSummaryBtn?.addEventListener("click", () => {
+            audioMixerPanelOpen = !audioMixerPanelOpen;
+            applyStateToUI();
+        });
+
+        els.visualToggle?.addEventListener("click", () => {
+            state.visualEnabled = !state.visualEnabled;
+            if (shaderEngine) shaderEngine.setEnabled(state.visualEnabled);
+            applyStateToUI();
+            saveState();
+        });
+
+        els.aspectToggle?.addEventListener("click", (event) => {
+            event.stopPropagation();
+            if (els.aspectMenu) {
+                els.aspectMenu.classList.toggle("open");
+                els.aspectToggle.setAttribute("aria-expanded", els.aspectMenu.classList.contains("open") ? "true" : "false");
+            }
+        });
+
+        els.popupVisualBtn?.addEventListener("click", () => {
+            if (popupVisualActive) {
+                closePopupVisual();
+            } else {
+                openPopupVisual();
+            }
+        });
+
+        document.addEventListener("click", (event) => {
+            const aspectBtn = event.target.closest("[data-visual-aspect]");
+            if (aspectBtn) {
+                const aspect = aspectBtn.dataset.visualAspect;
+                state.visualAspect = aspect;
+                if (els.aspectMenu) els.aspectMenu.classList.remove("open");
+                applyStateToUI();
+                saveState();
+                return;
+            }
+            if (els.aspectMenu && !event.target.closest(".aspect-control")) {
+                els.aspectMenu.classList.remove("open");
+                if (els.aspectToggle) els.aspectToggle.setAttribute("aria-expanded", "false");
+            }
+        });
+
+        els.resolumeSummaryBtn?.addEventListener("click", () => {
+            resolumePanelOpen = !resolumePanelOpen;
+            applyStateToUI();
+        });
+
+        els.midiMapSummaryBtn?.addEventListener("click", () => {
+            midiMapPanelOpen = !midiMapPanelOpen;
+            applyStateToUI();
+        });
+
+        [
+            els.resolumeEnabled,
+            els.resolumeHost,
+            els.resolumePort,
+            els.resolumeMatrixTrigger,
+            els.resolumeDeckTrigger,
+            els.resolumeDashboardPulse,
+            els.resolumePulseAmount,
+            els.resolumePulseLength,
+            els.resolumePulseDebounce,
+            els.resolumeOscHost,
+            els.resolumeOscPort,
+            els.resolumeOscBridgeUrl
+        ].forEach((input) => input?.addEventListener("change", updateResolumeConfigFromUI));
+        els.resolumeClipTargetBtns.forEach((button) => {
+            button.addEventListener("click", () => toggleResolumeClipTarget(button));
+        });
+
+        els.resolumeTestBtn?.addEventListener("click", async () => {
+            updateResolumeConfigFromUI(false);
+            await resolume?.test();
+            applyStateToUI();
+            saveState();
+        });
+
+        els.resolumeDetectBtn?.addEventListener("click", async () => {
+            updateResolumeConfigFromUI(false);
+            const result = await resolume?.autoDetect();
+            if (result?.ok) state.resolume.host = result.host;
+            applyStateToUI();
+            saveState();
+        });
+
+        els.mixerInputs.forEach((input) => {
+            input.addEventListener("input", () => updateMixer(input, false));
+            input.addEventListener("change", () => updateMixer(input, true));
+        });
+
+        els.drumSoundBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-drum-sound]");
+            if (button) switchDrumSound(button.dataset.drumSound);
+        });
+
+        els.bassSoundBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-bass-sound]");
+            if (button) switchBassSound(button.dataset.bassSound);
+        });
+
+        els.melodySoundBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-melody-sound]");
+            if (button) switchMelodySound(button.dataset.melodySound);
+        });
+
+        els.otherSoundBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-other-sound]");
+            if (button) switchOtherSound(button.dataset.otherSound);
+        });
+
+        els.modeBtns.forEach((button) => {
+            button.addEventListener("click", () => switchMode(button.dataset.mode));
+        });
+
+        els.bankBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-bank]");
+            if (button) switchBank(Number(button.dataset.bank));
+        });
+
+        els.presetBtns?.addEventListener("click", (event) => {
+            const globalButton = event.target.closest("[data-global-preset]");
+            if (globalButton) {
+                switchAllPresets(Number(globalButton.dataset.globalPreset));
+                return;
+            }
+            const button = event.target.closest("[data-preset]");
+            if (button) switchPreset(Number(button.dataset.preset), button.dataset.presetKind || state.mode);
+        });
+
+        els.randomRoleBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-random-role]");
+            if (button) switchRandomRole(button.dataset.randomRole);
+        });
+
+        els.trackRateBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-track-rate]");
+            if (button) switchTrackRate(Number(button.dataset.trackRate));
+        });
+
+        els.generatorSummaryBtn?.addEventListener("click", () => {
+            generatorPanelOpen = !generatorPanelOpen;
+            applyStateToUI();
+        });
+
+        els.generatorModeBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-generator-mode]");
+            if (button) switchPitchGeneratorMode(button.dataset.generatorMode);
+        });
+
+        els.generatorRoleBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-generator-role]");
+            if (button) switchPitchGeneratorRole(button.dataset.generatorRole);
+        });
+
+        els.generatorStyleBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-generator-style]");
+            if (button) switchPitchGeneratorStyle(button.dataset.generatorStyle);
+        });
+
+        els.pitchToolBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-pitch-shift]");
+            if (button) shiftSelectedPitch(Number(button.dataset.pitchShift));
+        });
+
+        els.drumBarControls?.addEventListener("click", (event) => {
+            const followButton = event.target.closest("[data-drum-follow]");
+            if (followButton) { toggleDrumFollowPage(); return; }
+            const loopButton = event.target.closest("[data-drum-loop]");
+            if (loopButton) { setDrumLoopLength(Number(loopButton.dataset.drumLoop)); return; }
+            const pageButton = event.target.closest("[data-drum-page]");
+            if (pageButton) setDrumPage(Number(pageButton.dataset.drumPage));
+        });
+        els.noteBarControls?.addEventListener("click", (event) => {
+            const mode = state.mode;
+            if (mode === "drum") return;
+            const followButton = event.target.closest("[data-note-follow]");
+            if (followButton) { toggleNoteFollowPage(mode); return; }
+            const loopButton = event.target.closest("[data-note-loop]");
+            if (loopButton) { setNoteLoopLength(mode, Number(loopButton.dataset.noteLoop)); return; }
+            const pageButton = event.target.closest("[data-note-page]");
+            if (pageButton) setNotePage(mode, Number(pageButton.dataset.notePage));
+        });
+        els.randomBtn?.addEventListener("click", randomize);
+        els.scaleBtn?.addEventListener("click", toggleScalePopup);
+        els.scaleClose?.addEventListener("click", hideScalePopup);
+        els.scaleRootBtns?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-scale-root]");
+            if (button) selectScaleRoot(button.dataset.scaleRoot);
+        });
+        els.scaleOptionList?.addEventListener("click", (event) => {
+            const scaleButton = event.target.closest("[data-scale-id]");
+            if (scaleButton) selectScale(scaleButton.dataset.scaleId);
+            const genreButton = event.target.closest("[data-drum-genre]");
+            if (genreButton) selectDrumGenre(genreButton.dataset.drumGenre);
+        });
+        els.clearBtn?.addEventListener("click", clearAll);
+        els.copyBtn?.addEventListener("click", copyPattern);
+        els.pasteBtn?.addEventListener("click", pastePattern);
+        els.midiPanic?.addEventListener("click", () => panicMidi());
+        els.midiClose?.addEventListener("click", () => toggleMidiModal(false));
+        els.midiModal?.addEventListener("click", (event) => {
+            if (event.target === els.midiModal) toggleMidiModal(false);
+        });
+
+        window.addEventListener("beforeunload", flushSaveState);
+        window.addEventListener("pointermove", paintPatternStepAtPointer);
+        window.addEventListener("pointerup", finishPatternEditGesture);
+        window.addEventListener("pointercancel", finishPatternEditGesture);
+        document.addEventListener("keydown", handleGlobalShortcut);
+        document.addEventListener("keydown", handlePatternMatrixShortcut);
+        document.addEventListener("click", (event) => {
+            if (!event.target.closest(".file-control")) closeFileMenu();
+            if (!event.target.closest("#scale-popup") && !event.target.closest("#scaleBtn")) hideScalePopup();
+            if (!event.target.closest("#note-picker") && !event.target.closest(".step")) {
+                hideNotePicker();
+            }
+        });
+
+        document.addEventListener("shader-editor-open", (event) => {
+            if (!els.shaderEditorModal || !els.shaderEditorHost) return;
+            const shaderId = event.detail?.shaderId || shaderEditor?.activeId;
+            if (!shaderId || !shaderEditor) return;
+            shaderEditor.openEditor(shaderId, els.shaderEditorHost);
+            els.shaderEditorModal.classList.add("open");
+            els.shaderEditorModal.style.display = "flex";
+        });
+
+        document.addEventListener("shader-editor-close", () => {
+            if (els.shaderEditorModal) {
+                els.shaderEditorModal.classList.remove("open");
+                els.shaderEditorModal.style.display = "none";
+            }
+        });
+
+        if (els.shaderEditorModal) {
+            els.shaderEditorModal.addEventListener("click", (event) => {
+                if (event.target === els.shaderEditorModal) {
+                    document.dispatchEvent(new CustomEvent("shader-editor-close"));
+                }
+            });
+        }
+
+    }
+
+    function bindFileMenu() {
+        els.fileMenuToggle?.addEventListener("click", toggleFileMenu);
+        els.fileMenu?.addEventListener("click", (event) => {
+            const button = event.target.closest("[data-file-action]");
+            if (button) handleFileMenuAction(button.dataset.fileAction);
+        });
+        els.projectOpenInput?.addEventListener("change", openProjectFile);
+        document.addEventListener("click", (event) => {
+            if (!event.target.closest(".file-control")) closeFileMenu();
+        });
+    }
+
+    function handleGlobalShortcut(event) {
+        if (shouldIgnoreGlobalShortcut(event)) return;
+
+        const digitSlot = digitSlotFromEvent(event);
+        if (event.key === "Escape") {
+            closeFileMenu();
+        }
+        if (event.shiftKey && digitSlot !== null) {
+            event.preventDefault();
+            runShortcutCommand("switch-all-presets", { slot: digitSlot });
+            return;
+        }
+
+        if (event.code === "Space") {
+            event.preventDefault();
+            if (event.shiftKey) {
+                runShortcutCommand("toggle-play");
+                return;
+            }
+            if (event.ctrlKey) {
+                runShortcutCommand("tap-tempo");
+                return;
+            }
+            runShortcutCommand("resync");
+            return;
+        }
+
+        if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            runShortcutCommand("nudge", { value: -1 });
+            return;
+        }
+        if (event.key === "ArrowRight") {
+            event.preventDefault();
+            runShortcutCommand("nudge", { value: 1 });
+            return;
+        }
+        if (event.key === "ArrowUp") {
+            event.preventDefault();
+            runShortcutCommand("bpm-delta", { value: 1 });
+            return;
+        }
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            runShortcutCommand("bpm-delta", { value: -1 });
+        }
+    }
+
+    function shouldIgnoreGlobalShortcut(event) {
+        if (event.repeat) return true;
+        const target = event.target;
+        const tag = target?.tagName?.toLowerCase();
+        if (target?.isContentEditable || ["input", "select", "textarea"].includes(tag)) return true;
+        if (!isMonitor && els.midiModal?.classList.contains("open")) return true;
+        if (!isMonitor && els.notePicker?.classList.contains("open")) return true;
+        if (!isMonitor && els.scalePopup?.classList.contains("open")) return true;
+        return false;
+    }
+
+    function digitSlotFromEvent(event) {
+        const match = /^Digit([1-8])$/.exec(event.code);
+        if (match) return Number(match[1]) - 1;
+        if (!/^[1-8]$/.test(event.key)) return null;
+        return Number(event.key) - 1;
+    }
+
+    function runShortcutCommand(command, payload = {}) {
+        if (isMonitor) {
+            matrixControl?.sendCommand(command, payload);
+            return;
+        }
+        handleMatrixCommand(command, payload);
+    }
+
+    function handlePatternMatrixShortcut(event) {
+        if (shouldIgnorePatternShortcut(event)) return;
+
+        const presetShortcut = presetShortcutForEvent(event);
+        if (!presetShortcut) return;
+        event.preventDefault();
+        runShortcutCommand("switch-preset", presetShortcut);
+    }
+
+    function shouldIgnorePatternShortcut(event) {
+        if (event.defaultPrevented) return true;
+        if (event.repeat) return true;
+        const target = event.target;
+        const tag = target?.tagName?.toLowerCase();
+        if (target?.isContentEditable || ["input", "select", "textarea"].includes(tag)) return true;
+        if (els.midiModal?.classList.contains("open")) return true;
+        if (els.notePicker?.classList.contains("open")) return true;
+        if (els.scalePopup?.classList.contains("open")) return true;
+        return false;
+    }
+
+    function presetShortcutForEvent(event) {
+        if (event.ctrlKey || event.altKey || event.metaKey) return null;
+        const key = event.key.toLowerCase();
+        const maps = {
+            drum: "zxcvbnm,",
+            bass: "asdfghjk",
+            melody: "qwertyui",
+            other: "12345678"
+        };
+        for (const [kind, keys] of Object.entries(maps)) {
+            const slot = keys.indexOf(key);
+            if (slot !== -1) return { kind, slot };
+        }
+        return null;
+    }
+
+    async function togglePlay() {
+        if (!audio?.ctx) {
+            setEngineState("Audio unavailable");
+            return;
+        }
+
+        try {
+            await audio.resume();
+        } catch (error) {
+            handleSequencerError(error, { source: "audio-resume" });
+            setEngineState("Audio blocked");
+            return;
+        }
+        if (!sequencer.isRunning()) {
+            sequencer.start();
+            els.playBtn.textContent = "Stop";
+            els.playBtn.classList.add("playing");
+            setEngineState("Playing");
+        } else {
+            sequencer.stop();
+            els.playBtn.textContent = "Play";
+            els.playBtn.classList.remove("playing");
+            setEngineState("Ready");
+            clearCurrentSteps();
+        }
+        syncMatrixState();
+    }
+
+    function setBpm(value) {
+        state.bpm = clamp(Math.round(Number(value) || state.bpm), 60, 220);
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function tapTempo() {
+        const now = performance.now();
+        tapTimes = tapTimes.filter((time) => now - time < 2200);
+        tapTimes.push(now);
+        if (tapTimes.length < 2) return;
+
+        const intervals = tapTimes.slice(1).map((time, index) => time - tapTimes[index]);
+        const average = intervals.reduce((total, interval) => total + interval, 0) / intervals.length;
+        setBpm(60000 / average);
+    }
+
+    function nudgeTempo(direction) {
+        if (!sequencer?.isRunning()) return;
+        sequencer.nudge(direction > 0 ? -18 : 18);
+        syncMatrixState();
+    }
+
+    function resyncTransport() {
+        if (!sequencer) return;
+        sequencer.resync();
+        clearCurrentSteps();
+        syncMatrixState();
+    }
+
+    function runStep(steps) {
+        clearCurrentSteps();
+        const drumPattern = activePattern("drum");
+        const bassPattern = activePattern("bass");
+        const melodyPattern = activePattern("melody");
+        const otherPattern = activePattern("other");
+
+        tickEventsFor(steps, "drum").forEach(({ step }) => {
+            for (let track = 0; track < DRUM_VOICE_ORDER.length; track += 1) {
+                const voice = drumVoiceFromTrack(track);
+                const lane = drumLaneForVoice(voice);
+                const active = drumPattern[track]?.[step];
+                const drumPage = Math.floor(step / 16);
+                if (state.mode === "drum" && state.drumFollowPage && drumPage !== state.drumPage) {
+                    state.drumPage = drumPage;
+                    renderGrid();
+                }
+                if (drumPage === state.drumPage && drumVoice(lane) === voice) {
+                    $(`#d-s-${lane}-${step % 16}`)?.classList.add("current");
+                }
+                if (active) {
+                    if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound));
+                    sendMidiOut(track);
+                    pulseResolume(voice);
+                    if (shaderEngine) shaderEngine.triggerDrumVoice(voice);
+                    applyParamTriggers(voice);
+                    pulseLogo("drum", voice);
+                }
+            }
+        });
+
+        tickEventsFor(steps, "bass").forEach(({ step }) => {
+            const bassCell = bassPattern[step];
+            const bassPage = Math.floor(step / 64);
+            if (state.mode === "bass" && state.bassFollowPage && bassPage !== state.bassPage) {
+                state.bassPage = bassPage;
+                renderGrid();
+            }
+            if (bassPage === state.bassPage) {
+                $(`#b-s-${step}`)?.classList.add("current");
+            }
+            if (bassCell?.active) {
+                const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
+                triggerBass(bassCell.note, velocity);
+                if (shaderEngine) shaderEngine.trigger("bass", noteNameToMidi(bassCell.note) / 127);
+            }
+        });
+
+        tickEventsFor(steps, "melody").forEach(({ step }) => {
+            const melodyCell = melodyPattern[step];
+            const melodyPage = Math.floor(step / 64);
+            if (state.mode === "melody" && state.melodyFollowPage && melodyPage !== state.melodyPage) {
+                state.melodyPage = melodyPage;
+                renderGrid();
+            }
+            if (melodyPage === state.melodyPage) {
+                $(`#m-s-${step}`)?.classList.add("current");
+            }
+            if (melodyCell?.active) {
+                const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
+                triggerMelody(melodyCell.note, velocity);
+                if (shaderEngine) shaderEngine.trigger("melody", noteNameToMidi(melodyCell.note) / 127);
+            }
+        });
+
+        tickEventsFor(steps, "other").forEach(({ step }) => {
+            const otherCell = otherPattern[step];
+            const otherPage = Math.floor(step / 64);
+            if (state.mode === "other" && state.otherFollowPage && otherPage !== state.otherPage) {
+                state.otherPage = otherPage;
+                renderGrid();
+            }
+            if (otherPage === state.otherPage) {
+                $(`#o-s-${step}`)?.classList.add("current");
+            }
+            if (otherCell?.active) {
+                const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
+                triggerOther(otherCell.note, velocity);
+                if (shaderEngine) shaderEngine.trigger("other", noteNameToMidi(otherCell.note) / 127);
+            }
+        });
+    }
+
+    function tickEventsFor(steps, kind) {
+        const value = steps?.[kind];
+        if (Array.isArray(value)) return value;
+        if (Number.isInteger(value)) return [{ kind, step: value, delayMs: 0 }];
+        return [];
+    }
+
+    function pulseLogo(kind, voice) {
+        const logoEl = document.getElementById("syntetika-logo");
+        if (!logoEl || !logoEl.classList.contains("visible")) return;
+        const isHat = voice === "hat-close" || voice === "hat-open";
+        const isDrum = kind === "drum" && !isHat;
+        logoEl.classList.remove("pulse", "pulse-drum", "pulse-hat");
+        void logoEl.offsetWidth;
+        if (isHat) {
+            logoEl.classList.add("pulse-hat");
+        } else if (isDrum) {
+            logoEl.classList.add("pulse-drum");
+        } else {
+            logoEl.classList.add("pulse");
+        }
+    }
+
+    function triggerDrum(track, velocity) {
+        const voice = drumVoiceFromTrack(track);
+        const lane = drumLaneForVoice(voice);
+        if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound));
+        sendMidiOut(track);
+        pulseResolume(voice);
+        if (shaderEngine) shaderEngine.triggerDrumVoice(voice);
+        applyParamTriggers(voice);
+        if (popupVisualActive) sendToPopupVisual({ type: 'trigger-voice', voice });
+        pulseLogo("drum");
+    }
+
+    function triggerBass(note, velocity) {
+        if (internalAudioEnabled("bass")) triggerAudioSafely("bass", () => audio.playBass(note, state.bassSound));
+        sendBassMidi(note, velocity);
+        pulseResolume("bass");
+        if (shaderEngine) shaderEngine.trigger("bass", noteNameToMidi(note) / 127);
+        applyParamTriggers("bass");
+        if (popupVisualActive) sendToPopupVisual({ type: 'trigger-kind', kind: 'bass', notePitch: noteNameToMidi(note) / 127 });
+        pulseLogo("bass");
+    }
+
+    function triggerMelody(note, velocity) {
+        if (internalAudioEnabled("melody")) triggerAudioSafely("melody", () => audio.playMelody(note, state.melodySound));
+        sendMelodyMidi(note, velocity);
+        pulseResolume("melody");
+        if (shaderEngine) shaderEngine.trigger("melody", noteNameToMidi(note) / 127);
+        applyParamTriggers("melody");
+        if (popupVisualActive) sendToPopupVisual({ type: 'trigger-kind', kind: 'melody', notePitch: noteNameToMidi(note) / 127 });
+        pulseLogo("melody");
+    }
+
+    function triggerOther(note, velocity) {
+        if (internalAudioEnabled("other")) triggerAudioSafely("other", () => audio.playOther(note, state.otherSound));
+        sendOtherMidi(note, velocity);
+        pulseResolume("other");
+        if (shaderEngine) shaderEngine.trigger("other", noteNameToMidi(note) / 127);
+        applyParamTriggers("other");
+        if (popupVisualActive) sendToPopupVisual({ type: 'trigger-kind', kind: 'other', notePitch: noteNameToMidi(note) / 127 });
+        pulseLogo("other");
+    }
+
+    function triggerAudioSafely(label, callback) {
+        try {
+            callback?.();
+        } catch (error) {
+            handleSequencerError(error, { source: `${label}-audio` });
+        }
+    }
+
+    function handleSequencerError(error, context = {}) {
+        const now = performance.now();
+        if (now - lastSequencerErrorAt < 1200) return;
+        lastSequencerErrorAt = now;
+        console.error("Syntetika Engine sequencer error", context, error);
+        setEngineState("Sequencer recovered");
+    }
+
+    function internalAudioEnabled(kind) {
+        return state.internalAudio?.[kind] !== false;
+    }
+
+    function stepDurationMs() {
+        return sequencer?.stepDurationMs() ?? (60000 / state.bpm) / 4;
+    }
+
+    function renderGrid() {
+        if (!els.grid) return;
+        els.grid.innerHTML = "";
+        els.moduleTitle.textContent = state.mode === "drum" ? "DrumBrute Impact" : state.mode === "bass" ? "Model D" : state.mode === "melody" ? "Kobol Expander" : "Monostation";
+
+        if (state.mode === "drum") {
+            const drumPattern = activePattern("drum");
+            const pageOffset = state.drumPage * 16;
+            DRUM_LABELS.forEach((_, track) => {
+                const row = createRow(drumVoiceLabel(track), track > 0);
+                const labelEl = row.querySelector(".label");
+                labelEl.title = track > 0 ? `Switch to ${nextDrumVoiceLabel(track)}` : "Kick";
+                if (track > 0) {
+                    labelEl.addEventListener("click", () => toggleDrumVoice(track));
+                    labelEl.addEventListener("keydown", (event) => {
+                        if (!isStepKeyboardToggle(event)) return;
+                        event.preventDefault();
+                        toggleDrumVoice(track);
+                    });
+                }
+                const voiceTrack = drumTrackForLane(track);
+                for (let step = 0; step < 16; step += 1) {
+                    const patternStep = pageOffset + step;
+                    const cell = createStep(`d-s-${track}-${step}`);
+                    cell.classList.toggle("active", drumPattern[voiceTrack]?.[patternStep]);
+                    bindDrumStepEditor(cell, drumPattern, voiceTrack, patternStep);
+                    row.appendChild(cell);
+                }
+                els.grid.appendChild(row);
+            });
+        } else {
+            renderNoteSequencer(state.mode);
+        }
+
+        applyStateToUI();
+        markCurrentSteps();
+    }
+
+    function renderNoteSequencer(kind) {
+        const isMelody = kind === "melody";
+        const isOther = kind === "other";
+        const editKey = isMelody ? "melodyEditMode" : isOther ? "otherEditMode" : "editMode";
+        const idPrefix = isMelody ? "m" : isOther ? "o" : "b";
+        const labels = ["16 Step", "32 Step", "64 Step", state[editKey] ? "Edit On" : "Edit Off"];
+        const notePattern = activePattern(kind);
+        const pageOff = notePageOffset(kind);
+        const curLoopLen = getLoopLength(kind);
+
+        labels.forEach((label, rowIndex) => {
+            const row = createRow(label, true);
+            const labelEl = row.querySelector(".label");
+            const lens = [16, 32, 64];
+            if (rowIndex < 3 && curLoopLen === lens[rowIndex]) labelEl.classList.add("active-mode");
+            if (rowIndex === 3 && state[editKey]) labelEl.classList.add("active-mode");
+            labelEl.addEventListener("click", () => {
+                if (rowIndex < 3) {
+                    setNoteLoopLength(kind, lens[rowIndex]);
+                    return;
+                }
+                state[editKey] = !state[editKey];
+                renderGrid();
+                saveState();
+            });
+
+            for (let step = 0; step < 16; step += 1) {
+                const index = pageOff + rowIndex * 16 + step;
+                const data = notePattern[index] || { active: false, note: "C1" };
+                const cell = createStep(`${idPrefix}-s-${index}`);
+                cell.classList.toggle("bass-active", data.active);
+                if (data.active) {
+                    const note = document.createElement("span");
+                    note.className = "step-note";
+                    note.textContent = data.note;
+                    cell.appendChild(note);
+                }
+                bindNoteStepEditor(cell, kind, data, index, editKey);
+                row.appendChild(cell);
+            }
+            els.grid.appendChild(row);
+        });
+    }
+
+    function bindDrumStepEditor(cell, drumPattern, track, step) {
+        cell.dataset.editKind = "drum";
+        cell.dataset.editTrack = String(track);
+        cell.dataset.editStep = String(step);
+        cell.addEventListener("pointerdown", (event) => {
+            if (!isPrimaryPointer(event)) return;
+            event.preventDefault();
+            hideNotePicker();
+            const value = !drumPattern[track][step];
+            patternEditGesture = { kind: "drum", value, lastTrack: track, lastStep: step };
+            updateDrumStepCell(cell, drumPattern, track, step, value, true);
+        });
+        cell.addEventListener("pointerenter", (event) => {
+            if (!isPaintGesture(event, "drum")) return;
+            updateDrumStepCell(cell, drumPattern, track, step, patternEditGesture.value, patternEditGesture.value);
+        });
+        cell.addEventListener("keydown", (event) => {
+            if (!isStepKeyboardToggle(event)) return;
+            event.preventDefault();
+            updateDrumStepCell(cell, drumPattern, track, step, !drumPattern[track][step], true);
+            saveState();
+        });
+    }
+
+    function bindNoteStepEditor(cell, kind, data, index, editKey) {
+        cell.dataset.editKind = kind;
+        cell.dataset.editStep = String(index);
+        cell.addEventListener("pointerdown", (event) => {
+            if (!isPrimaryPointer(event)) return;
+            event.preventDefault();
+             if (state[editKey] && data.active) {
+                 finishPatternEditGesture();
+                 showNotePicker(kind, index, event.currentTarget);
+                 return;
+             }
+             hideNotePicker();
+             const value = !data.active;
+             patternEditGesture = { kind, value, lastStep: index };
+             updateNoteStepCell(cell, kind, data, value, true);
+               // If not in edit mode, clicking a step sets loop length based on which row (16/32/64 step) within the page
+               if (kind !== "drum" && !state[editKey]) {
+                   const pageOff = notePageOffset(kind);
+                   const relative = index - pageOff; // 0..47
+                   const rowIndex = Math.floor(relative / 16); // 0,1,2
+                    const noteLoopLengths = [16, 32, 64];
+                   const newLoop = noteLoopLengths[rowIndex];
+                   if (newLoop && newLoop !== getLoopLength(kind)) {
+                       setNoteLoopLength(kind, newLoop);
+                   }
+                   renderGrid();
+                   saveState();
+               }
+        });
+        cell.addEventListener("pointerenter", (event) => {
+            if (!isPaintGesture(event, kind)) return;
+            updateNoteStepCell(cell, kind, data, patternEditGesture.value, patternEditGesture.value);
+        });
+        cell.addEventListener("keydown", (event) => {
+            if (!isStepKeyboardToggle(event)) return;
+            event.preventDefault();
+            if (state[editKey] && data.active) {
+                showNotePicker(kind, index, event.currentTarget);
+                return;
+            }
+            updateNoteStepCell(cell, kind, data, !data.active, true);
+            saveState();
+        });
+    }
+
+    function paintPatternStepAtPointer(event) {
+        if (!patternEditGesture || (event.buttons & 1) !== 1) return;
+        const target = document.elementFromPoint(event.clientX, event.clientY)?.closest(".step[data-edit-kind]");
+        if (!target || target.dataset.editKind !== patternEditGesture.kind) return;
+        applyPatternGestureToCell(target, patternEditGesture.value);
+    }
+
+    function applyPatternGestureToCell(cell, value) {
+        const kind = cell.dataset.editKind;
+        const step = Number(cell.dataset.editStep);
+        if (!Number.isInteger(step)) return;
+        if (kind === "drum") {
+            const track = Number(cell.dataset.editTrack);
+            if (!Number.isInteger(track)) return;
+            paintDrumStepRange(track, step, value);
+            patternEditGesture.lastTrack = track;
+            patternEditGesture.lastStep = step;
+            return;
+        }
+        if (!SEQUENCER_MODES.includes(kind) || kind === "drum") return;
+        paintNoteStepRange(kind, step, value);
+        patternEditGesture.lastStep = step;
+    }
+
+    function paintDrumStepRange(track, step, value) {
+        const pattern = activePattern("drum");
+        const sameTrack = patternEditGesture?.lastTrack === track;
+        const start = sameTrack && Number.isInteger(patternEditGesture.lastStep)
+            ? Math.min(patternEditGesture.lastStep, step)
+            : step;
+        const end = sameTrack && Number.isInteger(patternEditGesture.lastStep)
+            ? Math.max(patternEditGesture.lastStep, step)
+            : step;
+        for (let nextStep = start; nextStep <= end; nextStep += 1) {
+            const nextCell = document.querySelector(`.step[data-edit-kind="drum"][data-edit-track="${track}"][data-edit-step="${nextStep}"]`);
+            if (nextCell) updateDrumStepCell(nextCell, pattern, track, nextStep, value, value);
+        }
+    }
+
+    function paintNoteStepRange(kind, step, value) {
+        const pattern = activePattern(kind);
+        const start = Number.isInteger(patternEditGesture?.lastStep)
+            ? Math.min(patternEditGesture.lastStep, step)
+            : step;
+        const end = Number.isInteger(patternEditGesture?.lastStep)
+            ? Math.max(patternEditGesture.lastStep, step)
+            : step;
+        for (let nextStep = start; nextStep <= end; nextStep += 1) {
+            const data = pattern[nextStep];
+            const nextCell = document.querySelector(`.step[data-edit-kind="${kind}"][data-edit-step="${nextStep}"]`);
+            if (data && nextCell) updateNoteStepCell(nextCell, kind, data, value, value);
+        }
+    }
+
+    function updateDrumStepCell(cell, drumPattern, track, step, value, shouldPreview = false) {
+        const nextValue = Boolean(value);
+        const changed = drumPattern[track][step] !== nextValue;
+        drumPattern[track][step] = nextValue;
+        cell.classList.toggle("active", nextValue);
+        if (nextValue && (changed || shouldPreview)) triggerPreview("drum", track);
+    }
+
+    function drumVoice(track) {
+        const options = DRUM_LANE_VOICE_OPTIONS[track] || DRUM_LANE_VOICE_OPTIONS[0];
+        const voice = state.drumVoices?.[track];
+        return options.includes(voice) ? voice : options[0];
+    }
+
+    function drumTrackForLane(lane) {
+        return DRUM_VOICE_INDEX[drumVoice(lane)] ?? 0;
+    }
+
+    function drumVoiceFromTrack(track) {
+        return DRUM_VOICE_ORDER[track] || "kick";
+    }
+
+    function drumLaneForVoice(voice) {
+        return DRUM_VOICES[voice]?.lane ?? 0;
+    }
+
+    function drumVoiceLabel(track) {
+        return DRUM_VOICES[drumVoice(track)]?.label || DRUM_LABELS[track] || "Drum";
+    }
+
+    function nextDrumVoice(track) {
+        const options = DRUM_LANE_VOICE_OPTIONS[track] || [];
+        if (options.length < 2) return drumVoice(track);
+        const current = drumVoice(track);
+        const index = options.indexOf(current);
+        return options[(index + 1) % options.length];
+    }
+
+    function nextDrumVoiceLabel(track) {
+        return DRUM_VOICES[nextDrumVoice(track)]?.label || "";
+    }
+
+    function toggleDrumVoice(track) {
+        const options = DRUM_LANE_VOICE_OPTIONS[track] || [];
+        if (options.length < 2) return;
+        const nextVoice = nextDrumVoice(track);
+        state.drumVoices[track] = nextVoice;
+        renderGrid();
+        renderMidiUI();
+        saveState();
+    }
+
+    function updateNoteStepCell(cell, kind, data, value, shouldPreview = false) {
+        const nextValue = Boolean(value);
+        const changed = data.active !== nextValue;
+        data.active = nextValue;
+        cell.classList.toggle("bass-active", nextValue);
+        cell.querySelector(".step-note")?.remove();
+        if (nextValue) {
+            const note = document.createElement("span");
+            note.className = "step-note";
+            note.textContent = data.note;
+            cell.appendChild(note);
+        }
+        if (nextValue && (changed || shouldPreview)) triggerPreview(kind, data.note);
+    }
+
+    function finishPatternEditGesture() {
+        if (!patternEditGesture) return;
+        patternEditGesture = null;
+        saveState();
+    }
+
+    function isPrimaryPointer(event) {
+        return event.isPrimary !== false && (event.button === 0 || event.pointerType === "touch" || event.pointerType === "pen");
+    }
+
+    function isPaintGesture(event, kind) {
+        return patternEditGesture?.kind === kind && (event.buttons & 1) === 1;
+    }
+
+    function isStepKeyboardToggle(event) {
+        return event.key === "Enter" || event.key === " ";
+    }
+
+    function createRow(label, clickable = false) {
+        const row = document.createElement("div");
+        row.className = "grid-row";
+        const labelEl = document.createElement("div");
+        labelEl.className = `label${clickable ? " clickable" : ""}`;
+        labelEl.textContent = label;
+        if (clickable) {
+            labelEl.setAttribute("role", "button");
+            labelEl.tabIndex = 0;
+        }
+        row.appendChild(labelEl);
+        return row;
+    }
+
+    function createStep(id) {
+        const cell = document.createElement("button");
+        cell.type = "button";
+        cell.id = id;
+        cell.className = "step";
+        return cell;
+    }
+
+    function renderNotePicker() {
+        renderNotePickerUi(els.notePicker, currentScaleNoteNames(), (note) => {
+            const { kind, index } = notePickerContext(els.notePicker, SEQUENCER_MODES);
+            activePattern(kind)[index].note = note;
+            hideNotePicker();
+            triggerPreview(kind, note);
+            renderGrid();
+            saveState();
+        });
+    }
+
+    function showNotePicker(kind, index, target) {
+        const rect = target.getBoundingClientRect();
+        renderNotePicker();
+        openNotePicker(els.notePicker, {
+            kind,
+            index,
+            targetRect: rect,
+            selectedNote: activePattern(kind)?.[index]?.note
+        });
+    }
+
+    function currentScaleNoteNames() {
+        if (state.mode === "drum") return generateNoteNames(NOTE_PICKER_MIN_MIDI, NOTE_PICKER_MAX_MIDI);
+        const rootIndex = MIDI_NOTE_NAMES.indexOf(state.noteRoot);
+        const scale = currentScaleDefinition();
+        const intervals = Array.isArray(scale?.intervals) && scale.intervals.length
+            ? scale.intervals.map((interval) => ((Number(interval) % 12) + 12) % 12)
+            : Array.from({ length: 12 }, (_, index) => index);
+        const pitchClasses = new Set(intervals.map((interval) => (Math.max(0, rootIndex) + interval) % 12));
+        return generateNoteNames(NOTE_PICKER_MIN_MIDI, NOTE_PICKER_MAX_MIDI)
+            .filter((note) => pitchClasses.has(noteNameToMidi(note) % 12));
+    }
+
+    function hideNotePicker() {
+        hideNotePickerUi(els.notePicker);
+    }
+
+    async function triggerPreview(kind, value) {
+        if (!audio?.ctx || sequencer?.isRunning()) return;
+        try {
+            await audio.resume();
+        } catch (error) {
+            handleSequencerError(error, { source: "preview-audio-resume" });
+            setEngineState("Audio blocked");
+            return;
+        }
+        if (kind === "drum") triggerDrum(value);
+        if (kind === "bass") triggerBass(value);
+        if (kind === "melody") triggerMelody(value);
+        if (kind === "other") triggerOther(value);
+    }
+
+    function switchMode(mode) {
+        if (!SEQUENCER_MODES.includes(mode)) return;
+        state.mode = mode;
+        hideNotePicker();
+        renderGrid();
+        syncMatrixState();
+        saveState();
+    }
+
+    function clampPages() {
+        state.drumPage = clamp(state.drumPage, 0, drumPageCount() - 1);
+        ["bass", "melody", "other"].forEach((mode) => {
+            const key = notePageKey(mode);
+            state[key] = clamp(state[key], 0, notePageCount(mode) - 1);
+        });
+    }
+
+    function switchBank(bank) {
+        const targetBank = selectorValue(bank, BANK_COUNT);
+        if (targetBank === null) return;
+        SEQUENCER_MODES.forEach((mode) => {
+            state.activeBanks[mode] = targetBank;
+        });
+        clampPages();
+        triggerResolumeDeck(targetBank);
+        hideNotePicker();
+        renderGrid();
+        syncMatrixState();
+        saveState();
+    }
+
+    function saveVisualToPreset(slot) {
+        if (state.visualPresets[slot]?.skipVisual) return;
+        const visual = state.visualPresets[slot] || { shaderId: null, params: {} };
+        if (shaderEditor?.activeId) {
+            visual.shaderId = shaderEditor.activeId;
+        }
+        if (shaderEngine?.params) {
+            visual.params = { ...shaderEngine.params };
+        }
+        delete visual.skipVisual;
+        state.visualPresets[slot] = visual;
+    }
+
+    function loadVisualFromPreset(slot) {
+        const visual = state.visualPresets[slot];
+        if (!visual) return;
+        if (visual.skipVisual || !visual.shaderId) return;
+        const shader = shaderEditor?.getShaderById(visual.shaderId);
+        if (!shader) return;
+        shaderEditor.setActive(visual.shaderId);
+        if (shaderEngine && visual.params) {
+            for (const [name, value] of Object.entries(visual.params)) {
+                shaderEngine.setParam(name, value);
+            }
+        }
+        bindShaderControls();
+    }
+
+    function updateVisualPresetStatus() {
+        const el = $("#visual-preset-status");
+        if (!el) return;
+        const slot = activeSlotFor();
+        const shader = shaderEditor?.getActiveShader();
+        const shaderName = shader?.label || shader?.name || shader?.id || "—";
+        const visual = state.visualPresets[slot];
+        const isLinked = !visual?.skipVisual;
+        el.innerHTML = `
+            <span class="visual-preset-badge">P${slot + 1}</span>
+            <span class="visual-shader-badge">${shaderName}</span>
+            <button class="mini-btn visual-assign-btn" data-visual-assign type="button">Assign</button>
+            <button class="mini-btn visual-link-btn${isLinked ? " linked" : ""}" data-visual-link type="button">${isLinked ? "Link: On" : "Link: Off"}</button>
+        `;
+        const linkBtn = el.querySelector("[data-visual-link]");
+        if (linkBtn) {
+            linkBtn.addEventListener("click", () => {
+                const s = activeSlotFor();
+                const v = state.visualPresets[s];
+                if (v?.skipVisual) {
+                    delete v.skipVisual;
+                } else {
+                    state.visualPresets[s] = { shaderId: null, params: {}, skipVisual: true };
+                }
+                saveState();
+                updateVisualPresetStatus();
+            });
+        }
+        const assignBtn = el.querySelector("[data-visual-assign]");
+        if (assignBtn) {
+            assignBtn.addEventListener("click", () => {
+                saveVisualToPreset(activeSlotFor());
+                saveState();
+                assignBtn.classList.add("flash");
+                setTimeout(() => assignBtn.classList.remove("flash"), 300);
+            });
+        }
+    }
+
+    function switchPreset(slot, kind = state.mode) {
+        const targetMode = SEQUENCER_MODES.includes(kind) ? kind : state.mode;
+        const targetSlot = selectorValue(slot, PRESET_COUNT);
+        if (targetSlot === null) return;
+        state.mode = targetMode;
+        state.activeSlots[targetMode] = targetSlot;
+        if (targetMode === "drum") {
+            state.drumPage = clamp(state.drumPage, 0, drumPageCount() - 1);
+        } else {
+            const pageKey = notePageKey(targetMode);
+            state[pageKey] = clamp(state[pageKey], 0, notePageCount(targetMode) - 1);
+        }
+        loadVisualFromPreset(targetSlot);
+        triggerResolumeTrackClip(targetMode, targetSlot);
+        hideNotePicker();
+        renderGrid();
+        syncMatrixState();
+        saveState();
+        updateVisualPresetStatus();
+    }
+
+    function switchAllPresets(slot) {
+        const targetSlot = selectorValue(slot, PRESET_COUNT);
+        if (targetSlot === null) return;
+        SEQUENCER_MODES.forEach((mode) => {
+            state.activeSlots[mode] = targetSlot;
+        });
+        loadVisualFromPreset(targetSlot);
+        clampPages();
+        triggerResolumeColumn(targetSlot);
+        hideNotePicker();
+        renderGrid();
+        syncMatrixState();
+        saveState();
+        updateVisualPresetStatus();
+    }
+
+    function switchMultiplePresets(items = []) {
+        const changes = items
+            .map((item) => ({
+                kind: item?.kind,
+                slot: selectorValue(item?.slot, PRESET_COUNT)
+            }))
+            .filter((item) => SEQUENCER_MODES.includes(item.kind) && item.slot !== null);
+        if (!changes.length) return;
+
+        changes.forEach(({ kind, slot }) => {
+            state.activeSlots[kind] = slot;
+            if (kind === "drum") {
+                state.drumPage = clamp(state.drumPage, 0, drumPageCount() - 1);
+            } else {
+                const pageKey = notePageKey(kind);
+                state[pageKey] = clamp(state[pageKey], 0, notePageCount(kind) - 1);
+            }
+            triggerResolumeTrackClip(kind, slot);
+        });
+        hideNotePicker();
+        renderGrid();
+        syncMatrixState();
+        saveState();
+    }
+
+    function switchRandomRole(role) {
+        if (!["generate", "mutate", "fill"].includes(role)) return;
+        state.randomRole = role;
+        applyStateToUI();
+        saveState();
+    }
+
+    function switchTrackRate(rate) {
+        if (![0.5, 1, 2].includes(rate)) return;
+        assignTrackRate(state, state.mode, rate);
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function trackRate(kind = state.mode) {
+        return selectTrackRate(state, kind);
+    }
+
+    function switchPitchGeneratorMode(mode) {
+        if (!isPitchMode(state.mode) || !PITCH_GENERATOR_MODES.includes(mode)) return;
+        state.pitchGeneratorModes[state.mode] = mode;
+        applyStateToUI();
+        saveState();
+    }
+
+    function switchPitchGeneratorRole(role) {
+        if (!isPitchMode(state.mode) || !PITCH_GENERATOR_ROLES.includes(role)) return;
+        state.pitchGeneratorRoles[state.mode] = role;
+        if (!PITCH_GENERATOR_STYLES[role]?.includes(state.pitchGeneratorStyles[state.mode])) {
+            state.pitchGeneratorStyles[state.mode] = PITCH_GENERATOR_STYLES[role][0];
+        }
+        applyStateToUI();
+        saveState();
+    }
+
+    function switchPitchGeneratorStyle(style) {
+        if (!isPitchMode(state.mode)) return;
+        const role = currentPitchGeneratorRole();
+        if (!PITCH_GENERATOR_STYLES[role]?.includes(style)) return;
+        state.pitchGeneratorStyles[state.mode] = style;
+        applyStateToUI();
+        saveState();
+    }
+
+    function isPitchMode(mode) {
+        return mode === "bass" || mode === "melody" || mode === "other";
+    }
+
+    function currentPitchGeneratorRole() {
+        return PITCH_GENERATOR_ROLES.includes(state.pitchGeneratorRoles?.[state.mode])
+            ? state.pitchGeneratorRoles[state.mode]
+            : state.mode === "other" ? "mono" : state.mode;
+    }
+
+    function switchUiMode(mode) {
+        if (!["edit", "performance"].includes(mode)) return;
+        state.uiMode = mode;
+        hideNotePicker();
+        applyStateToUI();
+        saveState();
+    }
+
+    function toggleFileMenu() {
+        const open = !els.fileMenu?.classList.contains("open");
+        els.fileMenu?.classList.toggle("open", open);
+        els.fileMenu?.setAttribute("aria-hidden", open ? "false" : "true");
+        els.fileMenuToggle?.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function closeFileMenu() {
+        els.fileMenu?.classList.remove("open");
+        els.fileMenu?.setAttribute("aria-hidden", "true");
+        els.fileMenuToggle?.setAttribute("aria-expanded", "false");
+     }
+ 
+     function validatePatternMatrixData(state) {
+         // Validate memory structure for pattern matrix
+         const modes = ["drum", "bass", "melody", "other"];
+         
+         for (const mode of modes) {
+             if (!state.memory?.[mode]) return false;
+             
+             // Check banks
+             if (!Array.isArray(state.memory[mode]) || state.memory[mode].length !== BANK_COUNT) return false;
+             
+             for (let bank = 0; bank < BANK_COUNT; bank++) {
+                 if (!Array.isArray(state.memory[mode][bank]) || state.memory[mode][bank].length !== PRESET_COUNT) return false;
+                 
+                 for (let slot = 0; slot < PRESET_COUNT; slot++) {
+                     const pattern = state.memory[mode][bank][slot];
+                     
+                     // Validate pattern based on mode
+                     if (mode === "drum") {
+                         if (!Array.isArray(pattern) || pattern.length !== DRUM_TRACK_COUNT) return false;
+                         for (let track = 0; track < DRUM_TRACK_COUNT; track++) {
+                             if (!Array.isArray(pattern[track]) || pattern[track].length !== DRUM_STEP_COUNT) return false;
+                             // Validate each step is boolean
+                             for (let step = 0; step < DRUM_STEP_COUNT; step++) {
+                                 if (typeof pattern[track][step] !== "boolean") return false;
+                             }
+                         }
+                     } else {
+                         // bass, melody, other patterns
+                         if (!Array.isArray(pattern) || pattern.length !== NOTE_STEP_COUNT) return false;
+                         for (let step = 0; step < NOTE_STEP_COUNT; step++) {
+                             const stepData = pattern[step];
+                             if (typeof stepData !== "object" || stepData === null) return false;
+                             if (typeof stepData.active !== "boolean") return false;
+                             if (typeof stepData.note !== "string" || !isNoteName(stepData.note)) return false;
+                         }
+                     }
+                 }
+             }
+         }
+         
+         // Validate presetLoopLengths
+         if (!state.presetLoopLengths) return false;
+         for (const mode of modes) {
+             if (!Array.isArray(state.presetLoopLengths[mode]) || state.presetLoopLengths[mode].length !== BANK_COUNT) return false;
+             for (let bank = 0; bank < BANK_COUNT; bank++) {
+                 if (!Array.isArray(state.presetLoopLengths[mode][bank]) || state.presetLoopLengths[mode][bank].length !== PRESET_COUNT) return false;
+                 for (let slot = 0; slot < PRESET_COUNT; slot++) {
+                     const length = state.presetLoopLengths[mode][bank][slot];
+                     const allowed = mode === "drum" ? [16, 32, 64] : [64, 128, 256];
+                     if (!allowed.includes(length)) return false;
+                 }
+             }
+         }
+         
+         // Validate presetTrackRates
+         if (!state.presetTrackRates) return false;
+         for (const mode of modes) {
+             if (!Array.isArray(state.presetTrackRates[mode]) || state.presetTrackRates[mode].length !== BANK_COUNT) return false;
+             for (let bank = 0; bank < BANK_COUNT; bank++) {
+                 if (!Array.isArray(state.presetTrackRates[mode][bank]) || state.presetTrackRates[mode][bank].length !== PRESET_COUNT) return false;
+                 for (let slot = 0; slot < PRESET_COUNT; slot++) {
+                     const rate = state.presetTrackRates[mode][bank][slot];
+                     if (![0.5, 1, 2].includes(rate)) return false;
+                 }
+             }
+         }
+         
+         // Validate activeBanks and activeSlots
+         if (!state.activeBanks || !state.activeSlots) return false;
+         for (const mode of modes) {
+             const bank = state.activeBanks[mode];
+             const slot = state.activeSlots[mode];
+             if (typeof bank !== "number" || bank < 0 || bank >= BANK_COUNT) return false;
+             if (typeof slot !== "number" || slot < 0 || slot >= PRESET_COUNT) return false;
+         }
+         
+         return true;
+     }
+ 
+     function handleFileMenuAction(action) {
+         closeFileMenu();
+         if (action === "save") {
+             flushSaveState();
+             flashFileMenuLabel("Saved");
+             setEngineState("Project saved");
+         }
+         if (action === "save-as") exportProjectFile();
+         if (action === "open") els.projectOpenInput?.click();
+         if (action === "preferences") toggleMidiModal(true);
+         if (action === "help") showFileHelp();
+     }
+
+     function exportProjectFile() {
+         flushSaveState();
+         const project = {
+             app: "Syntetika Engine",
+             version: 1,
+             exportedAt: new Date().toISOString(),
+             state,
+             midiConfig
+         };
+         const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
+         const url = URL.createObjectURL(blob);
+         const anchor = document.createElement("a");
+         anchor.href = url;
+         anchor.download = `syntetika-engine-project-${project.exportedAt.slice(0, 10)}.json`;
+         document.body.append(anchor);
+         anchor.click();
+         anchor.remove();
+         URL.revokeObjectURL(url);
+         flashFileMenuLabel("Exported");
+         setEngineState("Project exported");
+     }
+
+    function openProjectFile() {
+         const file = els.projectOpenInput?.files?.[0];
+         if (!file) return;
+         
+         // Check file size (limit to 10MB)
+         if (file.size > 10 * 1024 * 1024) {
+             setEngineState("File too large");
+             window.alert("Ukuran file terlalu besar. Maksimal 10MB.");
+             els.projectOpenInput.value = "";
+             return;
+         }
+         
+         const reader = new FileReader();
+         reader.addEventListener("load", () => {
+             try {
+                 const project = JSON.parse(String(reader.result || "{}"));
+                 
+                 // Validate project structure
+                 if (!project || typeof project !== "object") {
+                     throw new Error("Invalid project file structure");
+                 }
+                 
+                 // Handle both old format (direct state) and new format (with app/version)
+                 const nextState = project.state || project;
+                 
+                 // Validate essential state properties
+                 if (!nextState || typeof nextState !== "object") {
+                     throw new Error("Invalid project state");
+                 }
+                 
+                  // Check for required state properties
+                  const requiredProps = ["bpm", "mode", "mixer", "memory", "presetLoopLengths", "presetTrackRates", "activeBanks", "activeSlots"];
+                  for (const prop of requiredProps) {
+                      if (!(prop in nextState)) {
+                          throw new Error(`Missing required property: ${prop}`);
+                      }
+                  }
+                  
+                  // Validate pattern matrix specific data
+                  if (!validatePatternMatrixData(nextState)) {
+                      throw new Error("Invalid pattern matrix data");
+                  }
+                 
+                 localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+                 if (project?.midiConfig) saveMidiConfig(project.midiConfig);
+                 setEngineState("Project opened - pattern matrix loaded");
+                 window.location.reload();
+             } catch (error) {
+                 console.error("Error loading project:", error);
+                 setEngineState("Open failed");
+                 window.alert(`Gagal memuat file project: ${error.message}`);
+             } finally {
+                 els.projectOpenInput.value = "";
+             }
+         });
+         reader.readAsText(file);
+    }
+
+    function showFileHelp() {
+        window.alert([
+            "Syntetika Engine",
+            "",
+            "Aplikasi sequencer audio-reactive untuk membuat pattern drum, bassline, melody, mono, visual realtime, MIDI mapping, dan kontrol Resolume.",
+            "",
+            "Dibuat dengan Codex oleh danartri @danartri.",
+            "",
+            "File:",
+            "Save: simpan project di browser.",
+            "Save As: export project JSON.",
+            "Open: buka project JSON.",
+            "Preferences: MIDI Map, MIDI routing, Resolume Link, dan OSC bridge.",
+            "",
+            "Shortcut:",
+            "Space: Resync transport.",
+            "Shift + Space: Play / Stop.",
+            "Ctrl + Space: Tap Tempo.",
+            "Arrow Up / Down: BPM +/-.",
+            "Arrow Left / Right: Nudge timing.",
+            "Shift + 1-8: All Presets 1-8.",
+            "Z X C V B N M ,: Drum preset 1-8.",
+            "A S D F G H J K: Bass preset 1-8.",
+            "Q W E R T Y U I: Melody preset 1-8.",
+            "1 2 3 4 5 6 7 8: Mono preset 1-8.",
+            "Esc: tutup menu."
+        ].join("\n"));
+    }
+
+    function flashFileMenuLabel(label) {
+        if (!els.fileMenuToggle) return;
+        const previous = els.fileMenuToggle.textContent;
+        els.fileMenuToggle.textContent = label;
+        window.setTimeout(() => {
+            if (els.fileMenuToggle) els.fileMenuToggle.textContent = previous || "File";
+        }, 900);
+    }
+
+    function toggleSidePanel(side) {
+        if (side === "left") {
+            leftPanelCollapsed = !leftPanelCollapsed;
+        } else if (side === "right") {
+            rightPanelCollapsed = !rightPanelCollapsed;
+        }
+        applyStateToUI();
+    }
+
+    function modeLabel(kind = state.mode) {
+        return kind === "bass" ? "Model D" : kind === "melody" ? "Kobol" : kind === "other" ? "Monostation" : "DrumBrute";
+    }
+
+    function styleLabel(style) {
+        return {
+            default: "Default",
+            glitch: "Glitch",
+            noise: "Noise",
+            abstract: "Abstract",
+            sub: "Sub",
+            lead: "Lead",
+            pad: "Pad",
+            "hard-bass": "Hard Bass",
+            vintage: "Vintage",
+            glass: "Glass",
+            bass: "Bass",
+            stab: "Stab",
+            fx: "FX",
+            acid: "Acid",
+            pluck: "Pluck",
+            bell: "Bell",
+            moog: "Moog",
+            plucky: "Plucky",
+            stabby: "Stabby",
+            fm: "FM"
+        }[style] || String(style || "").replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+
+    function currentSoundStyle() {
+        if (state.mode === "bass") return state.bassSound;
+        if (state.mode === "melody") return state.melodySound;
+        if (state.mode === "other") return state.otherSound;
+        return state.drumSound;
+    }
+
+    function enabledAudioCount() {
+        return SEQUENCER_MODES.filter((kind) => internalAudioEnabled(kind)).length;
+    }
+
+    function mixerSummary() {
+        const mixer = state.mixer || {};
+        return `Mixer: D${mixer.drum ?? 80} B${mixer.bass ?? 82} M${mixer.melody ?? 72} O${mixer.other ?? 74}`;
+    }
+
+    function toggleInternalAudio(kind) {
+        if (!SEQUENCER_MODES.includes(kind)) return;
+        state.internalAudio[kind] = !internalAudioEnabled(kind);
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function updateMixer(input, shouldSave) {
+        const kind = input.dataset.mixer;
+        if (!SEQUENCER_MODES.includes(kind)) return;
+        state.mixer ||= {};
+        state.mixer[kind] = clamp(Math.round(Number(input.value) || 0), 0, 100);
+        audio?.setMixerLevels(state.mixer);
+        applyMixerToUI();
+        if (shouldSave) saveState();
+    }
+
+    function updateResolumeConfigFromUI(shouldSave = true) {
+        state.resolume = normalizeResolumeConfig({
+            ...state.resolume,
+            enabled: Boolean(els.resolumeEnabled?.checked),
+            host: els.resolumeHost?.value,
+            port: Number(els.resolumePort?.value),
+            matrixTrigger: Boolean(els.resolumeMatrixTrigger?.checked),
+            deckTrigger: Boolean(els.resolumeDeckTrigger?.checked),
+            dashboardPulse: Boolean(els.resolumeDashboardPulse?.checked),
+            oscHost: els.resolumeOscHost?.value,
+            oscPort: Number(els.resolumeOscPort?.value),
+            oscBridgeUrl: els.resolumeOscBridgeUrl?.value,
+            pulseAmount: Number(els.resolumePulseAmount?.value),
+            pulseLengthMs: Number(els.resolumePulseLength?.value),
+            pulseDebounceMs: Number(els.resolumePulseDebounce?.value),
+            oscTargets: {
+                clipTargets: resolumeClipTargetsFromUI()
+            }
+        });
+        resolume?.setConfig(state.resolume);
+        applyResolumeToUI();
+        if (shouldSave) saveState();
+    }
+
+    function triggerResolumeTrackClip(kind, slot) {
+        resolume?.triggerTrackClip(kind, slot);
+    }
+
+    function triggerResolumeColumn(slot) {
+        resolume?.triggerColumn(slot);
+    }
+
+    function triggerResolumeDeck(slot) {
+        resolume?.selectDeck(slot);
+    }
+
+    function pulseResolume(linkKey) {
+        resolume?.pulse(linkKey);
+    }
+
+    function setResolumeStatus(text) {
+        if (els.resolumeStatus) els.resolumeStatus.textContent = text;
+    }
+
+    function switchDrumSound(style) {
+        if (!DRUM_SOUND_STYLES.includes(style)) return;
+        state.drumSound = style;
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function switchBassSound(style) {
+        if (!BASS_SOUND_STYLES.includes(style)) return;
+        state.bassSound = style;
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function switchMelodySound(style) {
+        if (!MELODY_SOUND_STYLES.includes(style)) return;
+        state.melodySound = style;
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function switchOtherSound(style) {
+        if (!OTHER_SOUND_STYLES.includes(style)) return;
+        state.otherSound = style;
+        applyStateToUI();
+        syncMatrixState();
+        saveState();
+    }
+
+    function randomize() {
+        randomizer.apply({
+            mode: state.mode,
+            role: state.randomRole,
+            pattern: activePattern(state.mode),
+            loopLength: getLoopLength(state.mode),
+            scale: currentScaleDefinition(),
+            root: state.noteRoot,
+            drumGenre: state.drumRandomGenre,
+            genre: state.drumRandomGenre,
+            generatorMode: isPitchMode(state.mode) ? state.pitchGeneratorModes[state.mode] : "explore",
+            generatorRole: isPitchMode(state.mode) ? currentPitchGeneratorRole() : "",
+            generatorStyle: isPitchMode(state.mode) ? state.pitchGeneratorStyles[state.mode] : ""
+        });
+        renderGrid();
+        saveState();
+    }
+
+    function setDrumLoopLength(loopLength) {
+        if (![16, 32, 64].includes(loopLength)) return;
+        assignLoopLength(state, "drum", loopLength);
+        state.drumPage = clamp(state.drumPage, 0, drumPageCount() - 1);
+        renderGrid();
+        saveState();
+    }
+
+    function setDrumPage(page) {
+        const value = Number(page);
+        if (!Number.isFinite(value)) return;
+        state.drumPage = clamp(Math.trunc(value), 0, drumPageCount() - 1);
+        renderGrid();
+        saveState();
+    }
+
+    function toggleDrumFollowPage() {
+        state.drumFollowPage = !state.drumFollowPage;
+        applyStateToUI();
+        saveState();
+    }
+
+    function drumPageCount() {
+        return Math.max(1, Math.ceil((Number(getLoopLength("drum")) || 16) / 16));
+    }
+
+     function setNoteLoopLength(kind, loopLength) {
+          if (![16, 32, 64, 128, 256].includes(loopLength)) return;
+         const pageKey = notePageKey(kind);
+         assignLoopLength(state, kind, loopLength);
+         state[pageKey] = clamp(state[pageKey], 0, notePageCount(kind) - 1);
+         renderGrid();
+         saveState();
+     }
+
+    function setNotePage(kind, page) {
+        const pageKey = notePageKey(kind);
+        const value = Number(page);
+        if (!Number.isFinite(value)) return;
+        state[pageKey] = clamp(Math.trunc(value), 0, notePageCount(kind) - 1);
+        renderGrid();
+        saveState();
+    }
+
+    function toggleNoteFollowPage(kind) {
+        const followKey = noteFollowKey(kind);
+        state[followKey] = !state[followKey];
+        applyStateToUI();
+        saveState();
+    }
+
+    function notePageCount(kind) {
+        return Math.max(1, Math.ceil((Number(getLoopLength(kind)) || 64) / 64));
+    }
+
+    function notePageOffset(kind) {
+        const pageKey = notePageKey(kind);
+        return state[pageKey] * 64;
+    }
+
+    function notePageKey(kind) {
+        if (kind === "bass") return "bassPage";
+        if (kind === "melody") return "melodyPage";
+        return "otherPage";
+    }
+
+    function noteFollowKey(kind) {
+        if (kind === "bass") return "bassFollowPage";
+        if (kind === "melody") return "melodyFollowPage";
+        return "otherFollowPage";
+    }
+
+    function renderScalePicker() {
+        renderScalePickerUi({
+            rootHost: els.scaleRootBtns,
+            optionHost: els.scaleOptionList,
+            mode: state.mode,
+            drumGenres: DRUM_RANDOM_GENRES,
+            noteRoots: MIDI_NOTE_NAMES,
+            scales: SCALE_DEFINITIONS
+        });
+        applyStateToUI();
+    }
+
+    function toggleScalePopup(event) {
+        event?.stopPropagation();
+        if (els.scalePopup?.classList.contains("open")) hideScalePopup();
+        else showScalePopup();
+    }
+
+    function showScalePopup() {
+        if (!els.scalePopup || !els.scaleBtn) return;
+        renderScalePicker();
+        const rect = els.scaleBtn.getBoundingClientRect();
+        els.scalePopup.classList.add("open");
+        els.scalePopup.setAttribute("aria-hidden", "false");
+        const popupWidth = els.scalePopup.offsetWidth || 320;
+        const popupHeight = els.scalePopup.offsetHeight || 360;
+        const margin = 8;
+        els.scalePopup.style.left = `${clamp(rect.left, margin, window.innerWidth - popupWidth - margin)}px`;
+        els.scalePopup.style.top = `${clamp(rect.bottom + margin, margin, window.innerHeight - popupHeight - margin)}px`;
+        applyStateToUI();
+    }
+
+    function hideScalePopup() {
+        els.scalePopup?.classList.remove("open");
+        els.scalePopup?.setAttribute("aria-hidden", "true");
+    }
+
+    function selectScaleRoot(root) {
+        if (!MIDI_NOTE_NAMES.includes(root)) return;
+        state.noteRoot = root;
+        renderNotePicker();
+        applyStateToUI();
+        saveState();
+    }
+
+    function selectScale(scaleId) {
+        if (!SCALE_DEFINITIONS.some((scale) => scale.id === scaleId)) return;
+        state.noteScale = scaleId;
+        renderNotePicker();
+        applyStateToUI();
+        saveState();
+    }
+
+    function selectDrumGenre(genreId) {
+        if (!DRUM_RANDOM_GENRES.some((genre) => genre.id === genreId)) return;
+        state.drumRandomGenre = genreId;
+        applyStateToUI();
+        saveState();
+    }
+
+    function currentScaleDefinition() {
+        return SCALE_DEFINITIONS.find((scale) => scale.id === state.noteScale) || SCALE_DEFINITIONS[0];
+    }
+
+    function scaleButtonLabel() {
+        if (state.mode === "drum") return `Genre: ${currentDrumGenre().label}`;
+        return `${state.noteRoot} ${currentScaleDefinition().label}`;
+    }
+
+    function currentDrumGenre() {
+        return DRUM_RANDOM_GENRES.find((genre) => genre.id === state.drumRandomGenre) || DRUM_RANDOM_GENRES[0];
+    }
+
+    function clearAll() {
+        if (state.mode === "drum") {
+            setActivePattern("drum", Array.from({ length: DRUM_VOICE_ORDER.length }, () => Array(64).fill(false)));
+        } else if (state.mode === "bass") {
+            setActivePattern("bass", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C1" })));
+        } else if (state.mode === "melody") {
+            setActivePattern("melody", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" })));
+        } else {
+            setActivePattern("other", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" })));
+        }
+        clearCurrentSteps();
+        renderGrid();
+        saveState();
+    }
+
+    function copyPattern() {
+        copiedPattern = JSON.stringify(state.mode === "drum"
+            ? copyCurrentDrumBar()
+            : copyCurrentNotePage(state.mode));
+        flashButton(els.copyBtn);
+    }
+
+    function pastePattern() {
+        if (!copiedPattern) return;
+        const data = JSON.parse(copiedPattern);
+        if (state.mode === "drum") {
+            pasteDrumBar(data);
+            renderGrid();
+            saveState();
+            flashButton(els.pasteBtn);
+            return;
+        }
+        if (data?.kind === "note-page") {
+            pasteNotePage(state.mode, data);
+            renderGrid();
+            saveState();
+            flashButton(els.pasteBtn);
+            return;
+        }
+        function padNotePattern(arr, defaultNote) {
+            return Array.from({ length: NOTE_STEP_COUNT }, (_, i) => {
+                const src = arr[i] || {};
+                return { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote };
+            });
+        }
+        if (state.mode === "bass" && Array.isArray(data) && data.length >= 64) {
+            setActivePattern("bass", padNotePattern(data, "C1"));
+        }
+        if (state.mode === "melody" && Array.isArray(data) && data.length >= 64) {
+            setActivePattern("melody", padNotePattern(data, "C2"));
+        }
+        if (state.mode === "other" && Array.isArray(data) && data.length >= 64) {
+            setActivePattern("other", padNotePattern(data, "C2"));
+        }
+        renderGrid();
+        saveState();
+        flashButton(els.pasteBtn);
+    }
+
+    function copyCurrentDrumBar() {
+        const start = state.drumPage * 16;
+        return {
+            kind: "drum-bar",
+            page: state.drumPage,
+            voices: [...DRUM_VOICE_ORDER],
+            rows: activePattern("drum").map((row) => Array.from({ length: 16 }, (_, step) => Boolean(row?.[start + step])))
+        };
+    }
+
+    function pasteDrumBar(data) {
+        const rows = drumBarRowsFromClipboard(data);
+        if (!rows) return;
+        const pattern = activePattern("drum");
+        const start = state.drumPage * 16;
+        for (let track = 0; track < DRUM_VOICE_ORDER.length; track += 1) {
+            pattern[track] ||= Array(64).fill(false);
+            for (let step = 0; step < 16; step += 1) {
+                pattern[track][start + step] = Boolean(rows[track]?.[step]);
+            }
+        }
+    }
+
+    function drumBarRowsFromClipboard(data) {
+        if (data?.kind === "drum-bar" && Array.isArray(data.rows)) {
+            return data.rows.map((row) => Array.from({ length: 16 }, (_, step) => Boolean(row?.[step])));
+        }
+        if (Array.isArray(data) && (data.length === 4 || data.length === DRUM_VOICE_ORDER.length)) {
+            const fullPattern = normalizePastedDrumPattern(data);
+            return fullPattern.map((row) => Array.from({ length: 16 }, (_, step) => Boolean(row?.[step])));
+        }
+        return null;
+    }
+
+    function normalizePastedDrumPattern(data) {
+        if (data.length === DRUM_VOICE_ORDER.length) {
+            return data.map((row) => Array.from({ length: 64 }, (_, step) => Boolean(row?.[step])));
+        }
+        const rows = Array.from({ length: DRUM_VOICE_ORDER.length }, () => Array(64).fill(false));
+        const legacyTargets = [0, 1, 5, 6];
+        legacyTargets.forEach((targetTrack, legacyTrack) => {
+            rows[targetTrack] = Array.from({ length: 64 }, (_, step) => Boolean(data[legacyTrack]?.[step]));
+        });
+        return rows;
+    }
+
+    function copyCurrentNotePage(kind) {
+        const pageOff = notePageOffset(kind);
+        const pattern = activePattern(kind);
+        const pageKey = notePageKey(kind);
+        return {
+            kind: "note-page",
+            page: state[pageKey],
+            data: pattern.slice(pageOff, pageOff + 64)
+        };
+    }
+
+    function pasteNotePage(kind, data) {
+        if (data?.kind !== "note-page" || !Array.isArray(data.data)) return;
+        const pageOff = notePageOffset(kind);
+        const pattern = activePattern(kind);
+        const defaultNote = kind === "bass" ? "C1" : "C2";
+        for (let i = 0; i < 64; i += 1) {
+            const src = data.data[i] || {};
+            pattern[pageOff + i] = { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote };
+        }
+    }
+
+    function shiftSelectedPitch(semitones) {
+        if (state.mode === "drum" || !Number.isFinite(semitones)) return;
+        const pattern = activePattern(state.mode);
+        pattern.forEach((step) => {
+            if (!step || !isNoteName(step.note)) return;
+            step.note = midiNoteName(clamp(noteNameToMidi(step.note) + semitones, 0, 127));
+        });
+        hideNotePicker();
+        renderGrid();
+        saveState();
+    }
+
+    function applyStateToUI() {
+        els.body?.classList.toggle("ui-edit", state.uiMode === "edit");
+        els.body?.classList.toggle("ui-performance", state.uiMode === "performance");
+        els.body?.classList.toggle("left-panel-collapsed", leftPanelCollapsed);
+        els.body?.classList.toggle("right-panel-collapsed", rightPanelCollapsed);
+        els.body?.classList.toggle("visual-disabled", !state.visualEnabled);
+        if (els.visualToggle) {
+            els.visualToggle.textContent = state.visualEnabled ? "Visual: On" : "Visual: Off";
+            els.visualToggle.classList.toggle("visual-off", !state.visualEnabled);
+        }
+        const logoEl = document.getElementById("syntetika-logo");
+        if (logoEl) {
+            const showLogo = !state.visualEnabled || popupVisualActive;
+            logoEl.classList.toggle("visible", showLogo);
+        }
+        if (els.fpsCounter && shaderEngine) {
+            els.fpsCounter.textContent = shaderEngine.fps > 0 ? shaderEngine.fps + " FPS" : "-- FPS";
+        }
+        if (els.popupVisualBtn) {
+            els.popupVisualBtn.textContent = popupVisualActive ? "Close Popup" : "Pop Up Visual";
+            els.popupVisualBtn.classList.toggle("popup-active", popupVisualActive);
+        }
+        if (els.canvasContainer) {
+            const aspect = state.visualAspect || "fill";
+            els.canvasContainer.dataset.aspect = aspect;
+            const aspectToggle = els.aspectToggle;
+            if (aspectToggle) {
+                const labels = { fill: "Aspect: Fill", "16-9": "Aspect: 16:9", "4-3": "Aspect: 4:3", "1-1": "Aspect: 1:1", "9-16": "Aspect: 9:16", custom: "Aspect: Custom" };
+                aspectToggle.textContent = labels[aspect] || "Aspect: Fill";
+            }
+        }
+        if (els.leftPanelToggle) {
+            els.leftPanelToggle.textContent = leftPanelCollapsed ? "Menu" : "Hide";
+            els.leftPanelToggle.setAttribute("aria-expanded", leftPanelCollapsed ? "false" : "true");
+        }
+        if (els.rightPanelToggle) {
+            els.rightPanelToggle.textContent = rightPanelCollapsed ? "Visual" : "Hide";
+            els.rightPanelToggle.setAttribute("aria-expanded", rightPanelCollapsed ? "false" : "true");
+        }
+        if (els.bpmVal) els.bpmVal.textContent = state.bpm;
+        $$("[data-ui-mode]").forEach((button) => button.classList.toggle("active", button.dataset.uiMode === state.uiMode));
+        els.modeBtns.forEach((button) => button.classList.toggle("active", button.dataset.mode === state.mode));
+        $$("[data-internal-audio]").forEach((button) => {
+            const kind = button.dataset.internalAudio;
+            const enabled = internalAudioEnabled(kind);
+            button.classList.toggle("active", enabled);
+            const label = kind === "bass" ? "Bass" : kind === "other" ? "Mono" : kind.charAt(0).toUpperCase() + kind.slice(1);
+            button.textContent = `${label} ${enabled ? "On" : "Off"}`;
+        });
+        if (els.audioSoundSummaryBtn) {
+            els.audioSoundSummaryBtn.textContent = `Audio / Sound: ${enabledAudioCount()}/4 On | ${modeLabel()} ${styleLabel(currentSoundStyle())}`;
+            els.audioSoundSummaryBtn.setAttribute("aria-expanded", audioSoundPanelOpen ? "true" : "false");
+        }
+        if (els.audioSoundDetail) els.audioSoundDetail.hidden = !audioSoundPanelOpen;
+        applyMixerToUI();
+        if (els.audioMixerSummaryBtn) {
+            els.audioMixerSummaryBtn.textContent = mixerSummary();
+            els.audioMixerSummaryBtn.setAttribute("aria-expanded", audioMixerPanelOpen ? "true" : "false");
+        }
+        if (els.audioMixerDetail) els.audioMixerDetail.hidden = !audioMixerPanelOpen;
+        if (els.midiMapSummaryBtn) {
+            const learned = midiConfig.tracks.filter((track) => Number.isInteger(track.inputNote)).length;
+            els.midiMapSummaryBtn.textContent = `MIDI Map: ${learned}/${midiConfig.tracks.length} Learned`;
+            els.midiMapSummaryBtn.setAttribute("aria-expanded", midiMapPanelOpen ? "true" : "false");
+        }
+        if (els.midiMapDetail) els.midiMapDetail.hidden = !midiMapPanelOpen;
+        applyResolumeToUI();
+        $$("[data-drum-sound]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.drumSound === state.drumSound);
+        });
+        $$("[data-bass-sound]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.bassSound === state.bassSound);
+        });
+        $$("[data-melody-sound]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.melodySound === state.melodySound);
+        });
+        $$("[data-other-sound]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.otherSound === state.otherSound);
+        });
+        $$("[data-sound-panel]").forEach((panel) => {
+            panel.hidden = panel.dataset.soundPanel !== state.mode;
+        });
+        if (els.drumBarControls) els.drumBarControls.hidden = state.mode !== "drum";
+        $$("[data-random-role]").forEach((button) => button.classList.toggle("active", button.dataset.randomRole === state.randomRole));
+        $$("[data-track-rate]").forEach((button) => {
+            button.classList.toggle("active", Number(button.dataset.trackRate) === trackRate());
+        });
+        if (els.randomBtn) els.randomBtn.textContent = state.randomRole === "generate" ? "Random" : state.randomRole;
+        renderPitchGeneratorControls();
+        if (els.scaleBtn) {
+            els.scaleBtn.textContent = scaleButtonLabel();
+            els.scaleBtn.disabled = false;
+            els.scaleBtn.classList.toggle("active", state.mode === "drum" ? state.drumRandomGenre !== "default" : true);
+        }
+        $$(".btn-scale-root[data-scale-root]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.scaleRoot === state.noteRoot);
+        });
+        $$(".btn-scale-option[data-scale-id]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.scaleId === state.noteScale);
+        });
+        $$(".btn-scale-option[data-drum-genre]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.drumGenre === state.drumRandomGenre);
+        });
+        $$("[data-drum-loop]").forEach((button) => {
+            button.classList.toggle("active", Number(button.dataset.drumLoop) === getLoopLength("drum"));
+        });
+        $$("[data-drum-page]").forEach((button) => {
+            const page = Number(button.dataset.drumPage);
+            const enabled = page < drumPageCount();
+            button.disabled = !enabled;
+            button.classList.toggle("active", enabled && page === state.drumPage);
+        });
+        $$("[data-drum-follow]").forEach((button) => {
+            button.classList.toggle("active", Boolean(state.drumFollowPage));
+        });
+        const isNoteMode = state.mode !== "drum";
+        if (els.noteBarControls) els.noteBarControls.hidden = !isNoteMode;
+        if (isNoteMode) {
+            $$("[data-note-loop]").forEach((button) => {
+                button.classList.toggle("active", Number(button.dataset.noteLoop) === getLoopLength(state.mode));
+            });
+            $$("[data-note-page]").forEach((button) => {
+                const page = Number(button.dataset.notePage);
+                const enabled = page < notePageCount(state.mode);
+                button.disabled = !enabled;
+                const pageKey = notePageKey(state.mode);
+                button.classList.toggle("active", enabled && page === state[pageKey]);
+            });
+            $$("[data-note-follow]").forEach((button) => {
+                const followKey = noteFollowKey(state.mode);
+                button.classList.toggle("active", Boolean(state[followKey]));
+            });
+        }
+        $$("[data-pitch-shift]").forEach((button) => {
+            button.disabled = state.mode === "drum";
+        });
+        const displayedBank = activeBankFor();
+        $$("[data-bank]").forEach((button) => button.classList.toggle("active", Number(button.dataset.bank) === displayedBank));
+        $$("[data-pattern-row]").forEach((row) => row.classList.toggle("active", row.dataset.patternRow === state.mode));
+        $$("[data-preset-kind][data-preset]").forEach((button) => {
+            const kind = button.dataset.presetKind;
+            const isCurrentBank = activeBankFor(kind) === displayedBank;
+            button.classList.toggle("active", isCurrentBank && Number(button.dataset.preset) === activeSlotFor(kind));
+        });
+        $$("[data-global-preset]").forEach((button) => {
+            const slot = Number(button.dataset.globalPreset);
+            const allSelected = SEQUENCER_MODES.every((mode) => activeBankFor(mode) === displayedBank && activeSlotFor(mode) === slot);
+            button.classList.toggle("active", allSelected);
+        });
+    }
+
+    function renderPitchGeneratorControls() {
+        const isPitch = isPitchMode(state.mode);
+        if (els.pitchGeneratorPanel) els.pitchGeneratorPanel.hidden = !isPitch;
+        if (!isPitch) return;
+
+        const generatorMode = PITCH_GENERATOR_MODES.includes(state.pitchGeneratorModes?.[state.mode])
+            ? state.pitchGeneratorModes[state.mode]
+            : "explore";
+        const generatorRole = currentPitchGeneratorRole();
+        const styles = PITCH_GENERATOR_STYLES[generatorRole] || [];
+        if (!styles.includes(state.pitchGeneratorStyles?.[state.mode])) {
+            state.pitchGeneratorStyles[state.mode] = styles[0];
+        }
+        const generatorStyle = state.pitchGeneratorStyles[state.mode];
+        const modeLabel = generatorMode === "structured" ? "Structured" : "Explore";
+        const roleLabel = generatorRole === "mono" ? "Mono" : generatorRole.charAt(0).toUpperCase() + generatorRole.slice(1);
+        const styleLabel = PITCH_GENERATOR_STYLE_LABELS[generatorStyle] || generatorStyle;
+
+        if (els.generatorSummaryBtn) {
+            els.generatorSummaryBtn.textContent = `Generator: ${modeLabel} / ${roleLabel} / ${styleLabel}`;
+            els.generatorSummaryBtn.setAttribute("aria-expanded", generatorPanelOpen ? "true" : "false");
+        }
+        if (els.generatorDetail) els.generatorDetail.hidden = !generatorPanelOpen;
+
+        $$("[data-generator-mode]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.generatorMode === generatorMode);
+        });
+        $$("[data-generator-role]").forEach((button) => {
+            button.classList.toggle("active", button.dataset.generatorRole === generatorRole);
+        });
+
+        if (!els.generatorStyleBtns) return;
+        els.generatorStyleBtns.replaceChildren(...styles.map((style) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = `btn-role${style === generatorStyle ? " active" : ""}`;
+            button.dataset.generatorStyle = style;
+            button.textContent = PITCH_GENERATOR_STYLE_LABELS[style] || style;
+            return button;
+        }));
+    }
+
+    function applyMixerToUI() {
+        els.mixerInputs.forEach((input) => {
+            const kind = input.dataset.mixer;
+            const value = clamp(Math.round(Number(state.mixer?.[kind]) || 0), 0, 100);
+            if (Number(input.value) !== value) input.value = value;
+        });
+        els.mixerValues.forEach((label) => {
+            const kind = label.dataset.mixerValue;
+            label.textContent = String(clamp(Math.round(Number(state.mixer?.[kind]) || 0), 0, 100));
+        });
+    }
+
+    function applyResolumeToUI() {
+        if (!state.resolume) state.resolume = normalizeResolumeConfig();
+        resolume?.setConfig(state.resolume);
+        if (els.resolumeSummaryBtn) {
+            const status = state.resolume.enabled ? `${state.resolume.host}:${state.resolume.port}` : "Off";
+            els.resolumeSummaryBtn.textContent = `Resolume Link: ${status}`;
+            els.resolumeSummaryBtn.setAttribute("aria-expanded", resolumePanelOpen ? "true" : "false");
+        }
+        if (els.resolumeDetail) els.resolumeDetail.hidden = !resolumePanelOpen;
+        if (els.resolumeEnabled) els.resolumeEnabled.checked = Boolean(state.resolume.enabled);
+        if (els.resolumeHost && els.resolumeHost.value !== state.resolume.host) els.resolumeHost.value = state.resolume.host;
+        if (els.resolumePort && Number(els.resolumePort.value) !== state.resolume.port) els.resolumePort.value = state.resolume.port;
+        if (els.resolumeMatrixTrigger) els.resolumeMatrixTrigger.checked = Boolean(state.resolume.matrixTrigger);
+        if (els.resolumeDeckTrigger) els.resolumeDeckTrigger.checked = Boolean(state.resolume.deckTrigger);
+        if (els.resolumeDashboardPulse) els.resolumeDashboardPulse.checked = Boolean(state.resolume.dashboardPulse);
+        if (els.resolumePulseAmount && Number(els.resolumePulseAmount.value) !== state.resolume.pulseAmount) {
+            els.resolumePulseAmount.value = state.resolume.pulseAmount;
+        }
+        if (els.resolumePulseLength && Number(els.resolumePulseLength.value) !== state.resolume.pulseLengthMs) {
+            els.resolumePulseLength.value = state.resolume.pulseLengthMs;
+        }
+        if (els.resolumePulseDebounce && Number(els.resolumePulseDebounce.value) !== state.resolume.pulseDebounceMs) {
+            els.resolumePulseDebounce.value = state.resolume.pulseDebounceMs;
+        }
+        if (els.resolumeOscHost && els.resolumeOscHost.value !== state.resolume.oscHost) els.resolumeOscHost.value = state.resolume.oscHost;
+        if (els.resolumeOscPort && Number(els.resolumeOscPort.value) !== state.resolume.oscPort) els.resolumeOscPort.value = state.resolume.oscPort;
+        if (els.resolumeOscBridgeUrl && els.resolumeOscBridgeUrl.value !== state.resolume.oscBridgeUrl) {
+            els.resolumeOscBridgeUrl.value = state.resolume.oscBridgeUrl;
+        }
+        els.resolumeClipTargetBtns.forEach((button) => {
+            const target = parseResolumeClipTarget(button.dataset.resolumeClipTarget);
+        const active = Boolean(target && state.resolume.oscTargets?.clipTargets?.[`layer${target.layer}`]?.[target.clip - 1]);
+            button.classList.toggle("active", active);
+        });
+        setResolumeStatus(resolume?.lastStatus || "Resolume idle");
+    }
+
+    function toggleResolumeClipTarget(button) {
+        const target = parseResolumeClipTarget(button.dataset.resolumeClipTarget);
+        if (!target) return;
+        state.resolume = normalizeResolumeConfig(state.resolume);
+        const layerKey = `layer${target.layer}`;
+        const clips = state.resolume.oscTargets.clipTargets[layerKey];
+        clips[target.clip - 1] = !clips[target.clip - 1];
+        resolume?.setConfig(state.resolume);
+        applyResolumeToUI();
+        saveState();
+    }
+
+    function resolumeClipTargetsFromUI() {
+        const clipTargets = {
+            layer1: Array(8).fill(false),
+            layer2: Array(8).fill(false),
+            layer3: Array(8).fill(false),
+            layer4: Array(8).fill(false)
+        };
+        els.resolumeClipTargetBtns.forEach((button) => {
+            const target = parseResolumeClipTarget(button.dataset.resolumeClipTarget);
+            if (target) clipTargets[`layer${target.layer}`][target.clip - 1] = button.classList.contains("active");
+        });
+        return clipTargets;
+    }
+
+    function parseResolumeClipTarget(value) {
+        const [layer, clip] = String(value || "").split(":").map(Number);
+        if (!Number.isInteger(layer) || layer < 1 || layer > 4) return null;
+        if (!Number.isInteger(clip) || clip < 1 || clip > 8) return null;
+        return { layer, clip };
+    }
+
+    function clearCurrentSteps() {
+        $$(".step.current").forEach((step) => step.classList.remove("current"));
+    }
+
+    function markCurrentSteps() {
+        if (!sequencer?.isRunning()) return;
+
+        const currentDrumStep = sequencer.currentStep("drum");
+        const currentBassStep = sequencer.currentStep("bass");
+        const currentMelodyStep = sequencer.currentStep("melody");
+        const currentOtherStep = sequencer.currentStep("other");
+
+        if (Math.floor(currentDrumStep / 16) === state.drumPage) {
+            for (let lane = 0; lane < DRUM_LANE_VOICE_OPTIONS.length; lane += 1) {
+                $(`#d-s-${lane}-${currentDrumStep % 16}`)?.classList.add("current");
+            }
+        }
+        if (Math.floor(currentBassStep / 64) === state.bassPage) {
+            $(`#b-s-${currentBassStep}`)?.classList.add("current");
+        }
+        if (Math.floor(currentMelodyStep / 64) === state.melodyPage) {
+            $(`#m-s-${currentMelodyStep}`)?.classList.add("current");
+        }
+        if (Math.floor(currentOtherStep / 64) === state.otherPage) {
+            $(`#o-s-${currentOtherStep}`)?.classList.add("current");
+        }
+    }
+
+    function toggleMidiModal(show) {
+        if (show) renderMidiUI();
+        els.midiModal.classList.toggle("open", show);
+        els.midiModal.setAttribute("aria-hidden", show ? "false" : "true");
+        if (!show) {
+            learningTrack = null;
+            renderMidiUI();
+        }
+    }
+
+    async function initMIDI() {
+        if (!midi) {
+            setMidiStatus("MIDI manager belum siap. Audio internal tetap aktif.");
+            renderMidiUI();
+            return;
+        }
+
+        const result = await midi.init();
+        if (!result.ok && result.reason === "unsupported") {
+            setMidiStatus("Web MIDI tidak tersedia di browser ini. Audio internal tetap aktif.");
+            renderMidiUI();
+            return;
+        }
+
+        if (result.ok) {
+            syncMidiDevices();
+            setMidiStatus("MIDI aktif. Pilih perangkat input/output, lalu gunakan Learn untuk mapping note.");
+        } else {
+            setMidiStatus("Izin MIDI ditolak atau perangkat tidak tersedia. Audio internal tetap aktif.");
+        }
+
+        renderMidiUI();
+    }
+
+    function handleMidiStateChange() {
+        syncMidiDevices();
+        renderMidiUI();
+        setMidiStatus("MIDI device berubah. Routing diperbarui otomatis.");
+    }
+
+    function syncMidiDevices() {
+        if (midi?.pruneMissingDevices(midiConfig)) saveMidi();
+    }
+
+    const paramDecayTimers = {};
+
+    function getParamDef(paramName) {
+        const defs = shaderEngine?.getInputDefs?.() ?? [];
+        return defs.find((d) => d.name === paramName) || { min: 0, max: 1 };
+    }
+
+    function setShaderParamImmediate(paramName, value) {
+        if (!shaderEngine) return;
+        shaderEngine.setParam(paramName, value);
+        if (Array.isArray(value)) {
+            const inp = getParamDef(paramName);
+            const labels = inp?.type === 'color' ? ['R','G','B','A'] : ['X','Y'];
+            const valEl = document.querySelector(`.shader-control-val[data-param="${paramName}"]`);
+            if (valEl) valEl.textContent = value.map((v, k) => `${labels[k]}:${Number(v).toFixed(2)}`).join(' ');
+            if (popupVisualActive) sendToPopupVisual({ type: 'param', name: paramName, value });
+            return;
+        }
+        const valEl = document.querySelector(`.shader-control-val[data-param="${paramName}"]`);
+        const ctrl = document.querySelector(`.dual-range-ctrl[data-param="${paramName}"]`);
+        const curEl = ctrl?.querySelector(".dual-range-current");
+        if (valEl) valEl.textContent = Number(value).toFixed(3);
+        if (curEl) {
+            const def = getParamDef(paramName);
+            const pct = def.max !== def.min ? ((value - def.min) / (def.max - def.min)) * 100 : 0;
+            curEl.style.left = Math.max(0, Math.min(100, pct)) + "%";
+        }
+        if (popupVisualActive) sendToPopupVisual({ type: 'param', name: paramName, value });
+    }
+
+    function decayParam(paramName, fromVal, toVal, duration = 200) {
+        if (paramDecayTimers[paramName]) {
+            clearInterval(paramDecayTimers[paramName]);
+        }
+        setShaderParamImmediate(paramName, fromVal);
+        const startTime = performance.now();
+        paramDecayTimers[paramName] = setInterval(() => {
+            const elapsed = performance.now() - startTime;
+            const t = Math.min(elapsed / duration, 1);
+            const current = fromVal + (toVal - fromVal) * t;
+            setShaderParamImmediate(paramName, current);
+            if (t >= 1) {
+                clearInterval(paramDecayTimers[paramName]);
+                delete paramDecayTimers[paramName];
+            }
+        }, 16);
+    }
+
+    function handleMidiTrigger(paramName) {
+        if (!shaderEngine) return;
+        const mapping = midiConfig.shaderTriggers?.find((m) => m.paramName === paramName);
+        if (!mapping) return;
+        if (mapping.reverse) {
+            decayParam(paramName, mapping.rangeStart, mapping.rangeMax, 200);
+        } else {
+            decayParam(paramName, mapping.rangeMax, mapping.rangeStart, 200);
+        }
+    }
+
+    function applyParamTriggers(source) {
+        if (!midiConfig.shaderTriggers) return;
+        midiConfig.shaderTriggers.forEach((m) => {
+            if (m.source === source) {
+                handleMidiTrigger(m.paramName);
+            }
+        });
+    }
+
+    function handleMidiMessage(inputID, data) {
+        const [status, note, velocity] = data;
+        const command = status & 0xf0;
+        const channel = (status & 0x0f) + 1;
+        if (command !== 0x90 || velocity === 0) return;
+
+        if (learningTrack !== null) {
+            const track = getMidiTrack(learningTrack);
+            if (track) {
+                midiConfig.inputID = inputID;
+                track.inputChannel = channel;
+                if (track.type === "drum") {
+                    track.inNote = note;
+                }
+            }
+            learningTrack = null;
+            saveMidi();
+            renderMidiUI();
+            return;
+        }
+
+        if (midiConfig.inputID && midiConfig.inputID !== inputID) return;
+        midiConfig.tracks.forEach((track) => {
+            if (!channelMatches(track.inputChannel, channel)) return;
+            if (track.type === "bass") {
+                triggerBass(midiNoteName(note), velocity);
+                return;
+            }
+            if (track.type === "melody") {
+                triggerMelody(midiNoteName(note), velocity);
+                return;
+            }
+            if (track.type === "other") {
+                triggerOther(midiNoteName(note), velocity);
+                return;
+            }
+            if (track.inNote !== note) return;
+            if (track.type === "drum") triggerDrum(track.drumIndex ?? drumIndexFromTrack(track.id), velocity);
+        });
+    }
+
+    function renderMidiUI() {
+        renderMidiPanel({
+            deviceRouting: els.midiDeviceRouting,
+            rows: els.midiRows,
+            midi,
+            midiConfig,
+            learningTrack,
+            setLearningTrack: (nextTrack) => {
+                learningTrack = nextTrack;
+                renderMidiUI();
+            },
+            saveMidi,
+            triggerPreview,
+            setMidiStatus
+        });
+    }
+
+    function setMidiStatus(text) {
+        if (els.midiStatus) els.midiStatus.textContent = text;
+    }
+
+    function panicMidi() {
+        midi?.panic();
+        setMidiStatus("Panic terkirim: All Notes Off ke semua output MIDI.");
+    }
+
+    function sendMidiOut(track) {
+        const routing = getMidiTrack(`drum-${drumVoiceFromTrack(track)}`);
+        if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
+        midi.sendNotes(midiConfig.outputID, routing.outputChannel, routing.outNotes, 0x7f, 120);
+    }
+
+    function sendBassMidi(noteName, velocity) {
+        const routing = getMidiTrack("bassline");
+        if (!midi?.isReady() || !midiConfig.outputID) return;
+        const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
+        const vel = velocity ?? 0x65;
+        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(90, stepDurationMs() * 0.82));
+    }
+
+    function sendMelodyMidi(noteName, velocity) {
+        const routing = getMidiTrack("melody");
+        if (!midi?.isReady() || !midiConfig.outputID) return;
+        const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
+        const vel = velocity ?? 0x6f;
+        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(120, stepDurationMs() * 1.2));
+    }
+
+    function sendOtherMidi(noteName, velocity) {
+        const routing = getMidiTrack("other");
+        if (!midi?.isReady() || !midiConfig.outputID) return;
+        const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
+        const vel = velocity ?? 0x62;
+        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(110, stepDurationMs()));
+    }
+
+    function handleMatrixCommand(command, payload) {
+        if (command === "switch-bank") {
+            if (SEQUENCER_MODES.includes(payload?.kind)) state.mode = payload.kind;
+            switchBank(Number(payload?.bank));
+            return;
+        }
+        if (command === "switch-preset") {
+            switchPreset(Number(payload?.slot), payload?.kind);
+            return;
+        }
+        if (command === "switch-all-presets") {
+            switchAllPresets(Number(payload?.slot));
+            return;
+        }
+        if (command === "switch-multiple-presets") {
+            switchMultiplePresets(Array.isArray(payload?.items) ? payload.items : []);
+            return;
+        }
+        if (command === "switch-mode") {
+            if (SEQUENCER_MODES.includes(payload?.kind)) switchMode(payload.kind);
+            return;
+        }
+        if (command === "toggle-play") {
+            togglePlay();
+            return;
+        }
+        if (command === "bpm-delta") {
+            setBpm(state.bpm + Number(payload?.value || 0));
+            return;
+        }
+        if (command === "tap-tempo") {
+            tapTempo();
+            return;
+        }
+        if (command === "resync") {
+            resyncTransport();
+            return;
+        }
+        if (command === "nudge") {
+            nudgeTempo(Number(payload?.value || 0));
+            return;
+        }
+        if (command === "toggle-internal-audio") {
+            toggleInternalAudio(payload?.kind);
+            return;
+        }
+        if (command === "switch-sound") {
+            const kind = payload?.kind;
+            const style = payload?.style;
+            if (kind === "drum") switchDrumSound(style);
+            if (kind === "bass") switchBassSound(style);
+            if (kind === "melody") switchMelodySound(style);
+            if (kind === "other") switchOtherSound(style);
+            return;
+        }
+        if (command === "sync") {
+            syncMatrixState();
+        }
+    }
+
+    function publicState() {
+        return {
+            mode: state.mode,
+            bpm: state.bpm,
+            trackRates: SEQUENCER_MODES.reduce((map, mode) => { map[mode] = trackRate(mode); return map; }, {}),
+            transportRunning: Boolean(sequencer?.isRunning()),
+            internalAudio: state.internalAudio,
+            sounds: {
+                drum: state.drumSound,
+                bass: state.bassSound,
+                melody: state.melodySound,
+                other: state.otherSound
+            },
+            activeBanks: state.activeBanks,
+            activeSlots: state.activeSlots
+        };
+    }
+
+    function publicPerformanceState() {
+        return {
+            mode: state.mode,
+            bpm: state.bpm,
+            trackRates: SEQUENCER_MODES.reduce((map, mode) => { map[mode] = trackRate(mode); return map; }, {}),
+            transportRunning: Boolean(sequencer?.isRunning()),
+            internalAudio: {
+                drum: state.internalAudio?.drum !== false,
+                bass: state.internalAudio?.bass !== false,
+                melody: state.internalAudio?.melody !== false,
+                other: state.internalAudio?.other !== false
+            },
+            sounds: {
+                drum: state.drumSound,
+                bass: state.bassSound,
+                melody: state.melodySound,
+                other: state.otherSound
+            },
+            activeBanks: {
+                drum: activeBankFor("drum"),
+                bass: activeBankFor("bass"),
+                melody: activeBankFor("melody"),
+                other: activeBankFor("other")
+            },
+            activeSlots: {
+                drum: activeSlotFor("drum"),
+                bass: activeSlotFor("bass"),
+                melody: activeSlotFor("melody"),
+                other: activeSlotFor("other")
+            }
+        };
+    }
+
+    function setEngineState(text) {
+        setEngineStateText(els.engineState, text);
+    }
+
+    function getMidiTrack(id) {
+        return midiConfig.tracks.find((track) => track.id === id);
+    }
+
+    function mountAIChat(engine) {
+        const existing = document.getElementById("ai-chat-panel");
+        if (existing) existing.remove();
+
+        const container = document.createElement("div");
+        container.id = "ai-chat-panel";
+        container.className = "ai-chat-panel";
+        container.innerHTML = `
+            <div class="ai-chat-header">
+                <span class="ai-chat-title">SYNTHeTIKA</span>
+                <span class="ai-chat-subtitle">AI Music Producer</span>
+                <button class="ai-chat-clear" id="ai-chat-clear" type="button" title="Clear chat">🗑</button>
+            </div>
+            <div class="ai-chat-messages" id="ai-chat-messages"></div>
+            <div class="ai-chat-input-row">
+                <textarea class="ai-chat-input" id="ai-chat-input" rows="1" placeholder="Describe your vision... mood? genre? idea?"></textarea>
+                <button class="ai-chat-gen" id="ai-chat-gen" type="button" title="Generate full composition">🎛</button>
+                <button class="ai-chat-send" id="ai-chat-send" type="button" title="Send">↵</button>
+            </div>
+        `;
+
+        const toggle = document.createElement("button");
+        toggle.id = "ai-chat-toggle";
+        toggle.className = "ai-chat-toggle";
+        toggle.textContent = "AI";
+        toggle.title = "Toggle AI Music Producer";
+        toggle.setAttribute("aria-label", "Toggle AI Music Producer");
+
+        document.body.append(toggle, container);
+
+        const messages = container.querySelector("#ai-chat-messages");
+        const input = container.querySelector("#ai-chat-input");
+        const sendBtn = container.querySelector("#ai-chat-send");
+        const clearBtn = container.querySelector("#ai-chat-clear");
+        const genBtn = container.querySelector("#ai-chat-gen");
+
+        let open = false;
+
+        function toggleOpen() {
+            open = !open;
+            container.classList.toggle("open", open);
+            toggle.classList.toggle("active", open);
+            if (open) input.focus();
+        }
+
+        toggle.addEventListener("click", toggleOpen);
+
+        function addMessage(text, isUser = false) {
+            const msg = document.createElement("div");
+            msg.className = `ai-chat-msg ${isUser ? "user" : "assistant"}`;
+            const pre = document.createElement("pre");
+            pre.textContent = text;
+            msg.appendChild(pre);
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function sendMessage() {
+            const text = input.value.trim();
+            if (!text) return;
+            addMessage(text, true);
+            input.value = "";
+            input.style.height = "auto";
+
+            if (engine) {
+                engine.process(text);
+            } else {
+                addMessage("AI engine not ready.");
+            }
+        }
+
+        function generateAllTracks() {
+            const genre = state.drumRandomGenre || "default";
+            addMessage(`🎛 Generate all tracks`, true);
+
+            try {
+                const scaleDef = currentScaleDefinition();
+                const root = state.noteRoot;
+
+                // Generate all 4 tracks into current bank/slot
+                for (const kind of ["drum", "bass", "melody", "other"]) {
+                    const pattern = activePattern(kind);
+                    if (!pattern) continue;
+
+                    if (kind === "drum") {
+                        randomizer.apply({
+                            mode: "drum",
+                            role: "generate",
+                            pattern,
+                            loopLength: getLoopLength("drum"),
+                            drumGenre: genre,
+                        });
+                    } else {
+                        const role = kind === "other" ? "mono" : kind;
+                        const style = state.pitchGeneratorStyles?.[kind] || (kind === "other" ? "stab" : "root-pulse");
+                        randomizer.apply({
+                            mode: kind,
+                            role: "generate",
+                            pattern,
+                            loopLength: getLoopLength(kind),
+                            scale: scaleDef,
+                            root,
+                            drumGenre: genre,
+                            genre,
+                            generatorMode: "structured",
+                            generatorRole: role,
+                            generatorStyle: style,
+                        });
+                    }
+                }
+
+                renderGrid();
+                saveState();
+                addMessage(`✅ All tracks generated. Press play ▶`);
+            } catch (err) {
+                addMessage(`❌ Error: ${err.message}`);
+            }
+        }
+
+        const _nonGeneratingTypes = new Set([
+            "query", "transport", "undo", "redo",
+            "bank", "preset", "preset-all", "mode",
+            "mixer", "mixer-delta", "bpm", "bpm-delta",
+            "scale", "root", "scale-root", "clear"
+        ]);
+
+        engine?.onResponse((response, entry) => {
+            addMessage(response, false);
+
+            // Auto-generate when user gives musical input via chat
+            if (entry?.intent && !_nonGeneratingTypes.has(entry.intent.type)) {
+                const intent = entry.intent;
+                let detectedGenre = null;
+
+                if (intent.type === "genre") {
+                    detectedGenre = intent.genre;
+                } else if (intent.type === "compose") {
+                    detectedGenre = intent.genre || entry.genre;
+                } else if (intent.type === "creative-direction" && intent.analysis?.genre) {
+                    detectedGenre = intent.analysis.genre;
+                }
+
+                if (detectedGenre) {
+                    state.drumRandomGenre = detectedGenre;
+                }
+                generateAllTracks();
+            }
+        });
+
+        sendBtn.addEventListener("click", sendMessage);
+        genBtn.addEventListener("click", generateAllTracks);
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 120) + "px";
+        });
+        input.addEventListener("input", () => {
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 120) + "px";
+        });
+
+        clearBtn.addEventListener("click", () => {
+            messages.innerHTML = "";
+            engine?.clearHistory();
+        });
+
+        addMessage(generateWelcomeMessage());
+    }
+
+    window.SyntetikaEngine = {
+        getState: () => structuredClone(state),
+        clearAll,
+        randomize,
+        switchMode,
+        switchBank,
+        switchPreset
+    };
+
+    window.SyntetikaEngineMatrix = {
+        getState: () => structuredClone(publicPerformanceState()),
+        command: handleMatrixCommand
+    };
+
+    window.AudioReactiveFX = window.SyntetikaEngine;
+    window.AudioReactiveFXMatrix = window.SyntetikaEngineMatrix;
+
+    await init();
+})();

@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntetika Engine - Offline Console</title>
+    <link rel="stylesheet" href="style.css?v=20260526-neon-core-light">
+    <script type="module" src="app.js?v=20260526-neon-core-light"></script>
+</head>
+<body>
+    <div id="midi-modal" class="modal" aria-hidden="true">
+        <div class="modal-content" role="dialog" aria-modal="true" aria-labelledby="midi-title">
+            <div class="modal-header">
+                <div>
+                    <p class="section-title">Device Routing</p>
+                    <h2 id="midi-title">MIDI Configuration</h2>
+                </div>
+                <div class="midi-device-grid" id="midi-device-routing" aria-label="MIDI device routing"></div>
+                <button class="btn-panic" id="midi-panic" type="button">Panic</button>
+                <button class="btn-close" id="midi-close" type="button">Save & Close</button>
+            </div>
+
+            <div class="midi-help" id="midi-status">MIDI belum diinisialisasi.</div>
+            <section class="resolume-panel" aria-label="Resolume link">
+                <button class="control-summary" id="resolume-summary-btn" type="button" aria-expanded="false" aria-controls="resolume-detail">
+                    Resolume Link
+                </button>
+                <div class="collapsible-detail resolume-detail" id="resolume-detail" hidden>
+                    <div class="resolume-grid">
+                        <label class="toggle-row">
+                            <input id="resolume-enabled" type="checkbox">
+                            <span>Enable Link</span>
+                        </label>
+                        <label>
+                            <span>Host / IP</span>
+                            <input id="resolume-host" type="text" value="127.0.0.1" autocomplete="off">
+                        </label>
+                        <label>
+                            <span>Port</span>
+                            <input id="resolume-port" type="number" min="1" max="65535" value="8080">
+                        </label>
+                        <button class="btn-flat" id="resolume-test-btn" type="button">Test</button>
+                        <button class="btn-flat" id="resolume-detect-btn" type="button">Auto Detect</button>
+                    </div>
+                    <div class="resolume-toggle-grid">
+                        <label class="toggle-row">
+                            <input id="resolume-matrix-trigger" type="checkbox">
+                            <span>Matrix Trigger</span>
+                        </label>
+                        <label class="toggle-row">
+                            <input id="resolume-deck-trigger" type="checkbox">
+                            <span>Bank -> Deck/Page</span>
+                        </label>
+                        <label class="toggle-row">
+                            <input id="resolume-dashboard-pulse" type="checkbox">
+                            <span>Dashboard Pulse</span>
+                        </label>
+                    </div>
+                    <div class="resolume-grid">
+                        <label>
+                            <span>Pulse Amount</span>
+                            <input id="resolume-pulse-amount" type="number" min="0" max="100" value="100">
+                        </label>
+                        <label>
+                            <span>Pulse Length ms</span>
+                            <input id="resolume-pulse-length" type="number" min="20" max="1000" value="80">
+                        </label>
+                        <label>
+                            <span>Debounce ms</span>
+                            <input id="resolume-pulse-debounce" type="number" min="0" max="250" value="24">
+                        </label>
+                        <label>
+                            <span>OSC Host / IP</span>
+                            <input id="resolume-osc-host" type="text" value="127.0.0.1" autocomplete="off">
+                        </label>
+                        <label>
+                            <span>OSC Port</span>
+                            <input id="resolume-osc-port" type="number" min="1" max="65535" value="7000">
+                        </label>
+                        <label>
+                            <span>Bridge URL</span>
+                            <input id="resolume-osc-bridge-url" type="text" value="http://127.0.0.1:8765/osc" autocomplete="off">
+                        </label>
+                    </div>
+                    <div class="resolume-clip-targets" aria-label="Resolume OSC clip targets">
+                        <div class="clip-target-row">
+                            <span class="section-title">L1 Clips</span>
+                            <button type="button" data-resolume-clip-target="1:1">1</button>
+                            <button type="button" data-resolume-clip-target="1:2">2</button>
+                            <button type="button" data-resolume-clip-target="1:3">3</button>
+                            <button type="button" data-resolume-clip-target="1:4">4</button>
+                            <button type="button" data-resolume-clip-target="1:5">5</button>
+                            <button type="button" data-resolume-clip-target="1:6">6</button>
+                            <button type="button" data-resolume-clip-target="1:7">7</button>
+                            <button type="button" data-resolume-clip-target="1:8">8</button>
+                        </div>
+                        <div class="clip-target-row">
+                            <span class="section-title">L2 Clips</span>
+                            <button type="button" data-resolume-clip-target="2:1">1</button>
+                            <button type="button" data-resolume-clip-target="2:2">2</button>
+                            <button type="button" data-resolume-clip-target="2:3">3</button>
+                            <button type="button" data-resolume-clip-target="2:4">4</button>
+                            <button type="button" data-resolume-clip-target="2:5">5</button>
+                            <button type="button" data-resolume-clip-target="2:6">6</button>
+                            <button type="button" data-resolume-clip-target="2:7">7</button>
+                            <button type="button" data-resolume-clip-target="2:8">8</button>
+                        </div>
+                        <div class="clip-target-row">
+                            <span class="section-title">L3 Clips</span>
+                            <button type="button" data-resolume-clip-target="3:1">1</button>
+                            <button type="button" data-resolume-clip-target="3:2">2</button>
+                            <button type="button" data-resolume-clip-target="3:3">3</button>
+                            <button type="button" data-resolume-clip-target="3:4">4</button>
+                            <button type="button" data-resolume-clip-target="3:5">5</button>
+                            <button type="button" data-resolume-clip-target="3:6">6</button>
+                            <button type="button" data-resolume-clip-target="3:7">7</button>
+                            <button type="button" data-resolume-clip-target="3:8">8</button>
+                        </div>
+                        <div class="clip-target-row">
+                            <span class="section-title">L4 Clips</span>
+                            <button type="button" data-resolume-clip-target="4:1">1</button>
+                            <button type="button" data-resolume-clip-target="4:2">2</button>
+                            <button type="button" data-resolume-clip-target="4:3">3</button>
+                            <button type="button" data-resolume-clip-target="4:4">4</button>
+                            <button type="button" data-resolume-clip-target="4:5">5</button>
+                            <button type="button" data-resolume-clip-target="4:6">6</button>
+                            <button type="button" data-resolume-clip-target="4:7">7</button>
+                            <button type="button" data-resolume-clip-target="4:8">8</button>
+                        </div>
+                    </div>
+                    <p class="midi-help">Matrix Pattern memakai REST API. Dashboard Pulse hanya dikirim ke clip OSC yang dipilih. Default semua clip OFF.</p>
+                    <div class="midi-help" id="resolume-status">Resolume idle.</div>
+                </div>
+            </section>
+            <section class="midi-map-panel" aria-label="MIDI map">
+                <button class="control-summary" id="midi-map-summary-btn" type="button" aria-expanded="false" aria-controls="midi-map-detail">
+                    MIDI Map
+                </button>
+                <div class="collapsible-detail midi-map-detail" id="midi-map-detail" hidden>
+                    <div class="midi-table-head" aria-hidden="true">
+                        <span>Instrument</span>
+                        <span>In Ch</span>
+                        <span>Learn</span>
+                        <span>In Note</span>
+                        <span>Out Ch</span>
+                        <span>Out Note</span>
+                        <span>Test</span>
+                    </div>
+                    <div id="midi-mapping-rows" class="midi-mapping-rows"></div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <div id="note-picker" class="note-picker" aria-hidden="true"></div>
+
+    <div id="shader-editor-modal" class="modal" aria-hidden="true">
+        <div class="modal-content shader-editor-content" role="dialog" aria-modal="true" aria-label="Shader Editor">
+            <div id="shader-editor-host"></div>
+        </div>
+    </div>
+
+    <button class="panel-toggle panel-toggle-left" id="left-panel-toggle" type="button" aria-controls="ui-panel" aria-expanded="true">Hide</button>
+    <button class="panel-toggle panel-toggle-right" id="right-panel-toggle" type="button" aria-controls="right-panel" aria-expanded="true">Hide</button>
+
+    <main id="app-container">
+        <section id="ui-panel" aria-label="Sequencer controls">
+            <header class="master-header">
+                <div class="header-line">
+                    <div>
+                        <p class="section-title">Master Transport</p>
+                        <h1>Syntetika Engine</h1>
+                    </div>
+                    <div class="engine-state" id="engine-state">Ready</div>
+                </div>
+
+                <div class="transport-grid" aria-label="Transport controls">
+                    <button id="playBtn" class="btn-start" type="button">Play</button>
+                    <button id="bpmDownBtn" class="btn-transport" type="button">BPM -</button>
+                    <button id="bpmUpBtn" class="btn-transport" type="button">BPM +</button>
+                    <div class="bpm-readout" aria-live="polite">
+                        <strong id="bpmVal">120</strong>
+                        <span>BPM</span>
+                    </div>
+                    <button id="tapTempoBtn" class="btn-transport" type="button">Tap Tempo</button>
+                    <button id="resyncBtn" class="btn-transport" type="button">Resync</button>
+                    <button id="nudgeDownBtn" class="btn-transport" type="button">Nudge -</button>
+                    <button id="nudgeUpBtn" class="btn-transport" type="button">Nudge +</button>
+                </div>
+
+                <section class="audio-sound-panel" aria-label="Internal audio and sound">
+                    <button class="control-summary" id="audio-sound-summary-btn" type="button" aria-expanded="false" aria-controls="audio-sound-detail">
+                        Internal Audio / Sound
+                    </button>
+                    <div class="collapsible-detail" id="audio-sound-detail" hidden>
+                        <p class="section-title">Internal Audio</p>
+                        <div class="internal-audio-row" id="internal-audio-btns" aria-label="Internal audio toggles">
+                            <button class="btn-audio active" type="button" data-internal-audio="drum">Drum On</button>
+                            <button class="btn-audio active" type="button" data-internal-audio="bass">Bass On</button>
+                            <button class="btn-audio active" type="button" data-internal-audio="melody">Melody On</button>
+                            <button class="btn-audio active" type="button" data-internal-audio="other">Mono On</button>
+                        </div>
+
+                        <div class="sound-panel" data-sound-panel="drum">
+                            <p class="section-title sound-title">Drum Sound</p>
+                            <div class="sound-row" id="drum-sound-btns" aria-label="Drum sound style">
+                                <button class="btn-sound active" type="button" data-drum-sound="default">Default</button>
+                                <button class="btn-sound" type="button" data-drum-sound="glitch">Glitch</button>
+                                <button class="btn-sound" type="button" data-drum-sound="noise">Noise</button>
+                                <button class="btn-sound" type="button" data-drum-sound="abstract">Abstract</button>
+                            </div>
+                        </div>
+
+                         <div class="sound-panel" data-sound-panel="bass">
+                             <p class="section-title sound-title">Model D Sound</p>
+                             <div class="sound-row" id="bass-sound-btns" aria-label="Bass sound style">
+                                 <button class="btn-sound active" type="button" data-bass-sound="hard-bass">Hard Bass</button>
+                                 <button class="btn-sound" type="button" data-bass-sound="sub">Sub</button>
+                                 <button class="btn-sound" type="button" data-bass-sound="lead">Lead</button>
+                                 <button class="btn-sound" type="button" data-bass-sound="pad">Pad</button>
+                             </div>
+                         </div>
+
+                         <div class="sound-panel" data-sound-panel="melody">
+                             <p class="section-title sound-title">Kobol Sound</p>
+                             <div class="sound-row" id="melody-sound-btns" aria-label="Melody sound style">
+                                 <button class="btn-sound active" type="button" data-melody-sound="vintage">Vintage</button>
+                                 <button class="btn-sound" type="button" data-melody-sound="glass">Glass</button>
+                                 <button class="btn-sound" type="button" data-melody-sound="lead">Lead</button>
+                                 <button class="btn-sound" type="button" data-melody-sound="pad">Pad</button>
+                             </div>
+                         </div>
+
+                         <div class="sound-panel" data-sound-panel="other">
+                             <p class="section-title sound-title">Monostation Sound</p>
+                             <div class="sound-row" id="other-sound-btns" aria-label="Mono sound style">
+                                 <button class="btn-sound active" type="button" data-other-sound="bass">Bass</button>
+                                 <button class="btn-sound" type="button" data-other-sound="lead">Lead</button>
+                                 <button class="btn-sound" type="button" data-other-sound="stab">Stab</button>
+                                 <button class="btn-sound" type="button" data-other-sound="fx">FX</button>
+                             </div>
+                         </div>
+                    </div>
+                </section>
+
+                <section class="audio-mixer" aria-label="Audio mixer">
+                    <button class="control-summary" id="audio-mixer-summary-btn" type="button" aria-expanded="false" aria-controls="audio-mixer-detail">
+                        Audio Mixer
+                    </button>
+                    <div class="collapsible-detail" id="audio-mixer-detail" hidden>
+                        <div class="mixer-row">
+                            <label for="mix-drum">Drum</label>
+                            <input id="mix-drum" type="range" min="0" max="100" step="1" value="80" data-mixer="drum">
+                            <span data-mixer-value="drum">80</span>
+                        </div>
+                        <div class="mixer-row">
+                            <label for="mix-bass">Bass</label>
+                            <input id="mix-bass" type="range" min="0" max="100" step="1" value="82" data-mixer="bass">
+                            <span data-mixer-value="bass">82</span>
+                        </div>
+                        <div class="mixer-row">
+                            <label for="mix-melody">Melody</label>
+                            <input id="mix-melody" type="range" min="0" max="100" step="1" value="72" data-mixer="melody">
+                            <span data-mixer-value="melody">72</span>
+                        </div>
+                        <div class="mixer-row">
+                            <label for="mix-mono">Mono</label>
+                            <input id="mix-mono" type="range" min="0" max="100" step="1" value="74" data-mixer="other">
+                            <span data-mixer-value="other">74</span>
+                        </div>
+                    </div>
+                </section>
+
+            </header>
+
+            <section class="module-card">
+                <div class="module-card-header">
+                    <div>
+                        <p class="section-title">Pattern Editor</p>
+                        <h2 id="module-title">Drum Kit</h2>
+                    </div>
+                    <div class="module-header-actions">
+                        <div class="rate-row" id="track-rate-btns" aria-label="Track rate">
+                            <button class="btn-role" type="button" data-track-rate="0.5">Rate 1/2</button>
+                            <button class="btn-role active" type="button" data-track-rate="1">Rate 1</button>
+                            <button class="btn-role" type="button" data-track-rate="2">Rate 2</button>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="section-title sequencer-selector-title" id="pattern-matrix-title">Pattern Matrix</p>
+                <div class="pattern-matrix" id="preset-btns" aria-label="Instrument presets">
+                    <div class="pattern-row global-preset-row" aria-label="Global preset trigger">
+                        <span class="pattern-label">All Presets</span>
+                        <button class="btn-sq" type="button" data-global-preset="0">1</button>
+                        <button class="btn-sq" type="button" data-global-preset="1">2</button>
+                        <button class="btn-sq" type="button" data-global-preset="2">3</button>
+                        <button class="btn-sq" type="button" data-global-preset="3">4</button>
+                        <button class="btn-sq" type="button" data-global-preset="4">5</button>
+                        <button class="btn-sq" type="button" data-global-preset="5">6</button>
+                        <button class="btn-sq" type="button" data-global-preset="6">7</button>
+                        <button class="btn-sq" type="button" data-global-preset="7">8</button>
+                    </div>
+                    <div class="pattern-row" data-pattern-row="other">
+                        <button class="pattern-mode-btn btn-mode" type="button" data-mode="other">Monostation</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="0">P1</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="1">P2</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="2">P3</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="3">P4</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="4">P5</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="5">P6</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="6">P7</button>
+                        <button class="btn-sq" type="button" data-preset-kind="other" data-preset="7">P8</button>
+                    </div>
+                    <div class="pattern-row" data-pattern-row="melody">
+                        <button class="pattern-mode-btn btn-mode" type="button" data-mode="melody">Kobol</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="0">P1</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="1">P2</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="2">P3</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="3">P4</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="4">P5</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="5">P6</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="6">P7</button>
+                        <button class="btn-sq" type="button" data-preset-kind="melody" data-preset="7">P8</button>
+                    </div>
+                    <div class="pattern-row" data-pattern-row="bass">
+                        <button class="pattern-mode-btn btn-mode" type="button" data-mode="bass">Model D</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="0">P1</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="1">P2</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="2">P3</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="3">P4</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="4">P5</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="5">P6</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="6">P7</button>
+                        <button class="btn-sq" type="button" data-preset-kind="bass" data-preset="7">P8</button>
+                    </div>
+                    <div class="pattern-row" data-pattern-row="drum">
+                        <button class="pattern-mode-btn btn-mode" type="button" data-mode="drum">DrumBrute</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="0">P1</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="1">P2</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="2">P3</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="3">P4</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="4">P5</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="5">P6</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="6">P7</button>
+                        <button class="btn-sq" type="button" data-preset-kind="drum" data-preset="7">P8</button>
+                    </div>
+                    <div class="pattern-row bank-row" id="bank-btns" aria-label="Pattern banks">
+                        <span class="pattern-label">Bank</span>
+                        <button class="btn-sq active" type="button" data-bank="0">B1</button>
+                        <button class="btn-sq" type="button" data-bank="1">B2</button>
+                        <button class="btn-sq" type="button" data-bank="2">B3</button>
+                        <button class="btn-sq" type="button" data-bank="3">B4</button>
+                        <button class="btn-sq" type="button" data-bank="4">B5</button>
+                        <button class="btn-sq" type="button" data-bank="5">B6</button>
+                        <button class="btn-sq" type="button" data-bank="6">B7</button>
+                        <button class="btn-sq" type="button" data-bank="7">B8</button>
+                    </div>
+                </div>
+
+                <div class="grid-area" id="grid-container" data-ui-section="grid-sequencer" aria-label="Sequencer grid"></div>
+                <div class="drum-bar-controls" id="drum-bar-controls" data-ui-section="grid-sequencer" aria-label="Drum bar controls">
+                    <div class="drum-bar-group" aria-label="Drum loop length">
+                        <button class="btn-bar" type="button" data-drum-loop="16">1 Bar</button>
+                        <button class="btn-bar" type="button" data-drum-loop="32">2 Bar</button>
+                        <button class="btn-bar" type="button" data-drum-loop="64">4 Bar</button>
+                    </div>
+                    <div class="drum-page-group" aria-label="Drum page">
+                        <button class="btn-bar btn-follow" type="button" data-drum-follow>Follow</button>
+                        <button class="btn-bar" type="button" data-drum-page="0">1</button>
+                        <button class="btn-bar" type="button" data-drum-page="1">2</button>
+                        <button class="btn-bar" type="button" data-drum-page="2">3</button>
+                        <button class="btn-bar" type="button" data-drum-page="3">4</button>
+                    </div>
+                </div>
+                <div class="drum-bar-controls" id="note-bar-controls" data-ui-section="grid-sequencer" aria-label="Note bar controls" hidden>
+                    <div class="drum-bar-group" aria-label="Loop length">
+                        <button class="btn-bar" type="button" data-note-loop="64">1 Bar</button>
+                        <button class="btn-bar" type="button" data-note-loop="128">2 Bar</button>
+                        <button class="btn-bar" type="button" data-note-loop="256">4 Bar</button>
+                    </div>
+                    <div class="drum-page-group" aria-label="Page">
+                        <button class="btn-bar btn-follow" type="button" data-note-follow>Follow</button>
+                        <button class="btn-bar" type="button" data-note-page="0">1</button>
+                        <button class="btn-bar" type="button" data-note-page="1">2</button>
+                        <button class="btn-bar" type="button" data-note-page="2">3</button>
+                        <button class="btn-bar" type="button" data-note-page="3">4</button>
+                    </div>
+                </div>
+
+                <div class="pitch-tool-row sequencer-pitch-tools" id="pitch-tool-btns" data-ui-section="grid-sequencer" aria-label="Pitch tools">
+                    <button class="btn-pitch" type="button" data-pitch-shift="-12">Octave -</button>
+                    <button class="btn-pitch" type="button" data-pitch-shift="12">Octave +</button>
+                    <button class="btn-pitch" type="button" data-pitch-shift="-1">Transpose -</button>
+                    <button class="btn-pitch" type="button" data-pitch-shift="1">Transpose +</button>
+                </div>
+
+                <div class="pattern-tools" data-ui-section="pattern-tools">
+                    <div class="scale-tool-row">
+                        <button class="btn-tool" id="scaleBtn" type="button">Scale</button>
+                    </div>
+                    <div class="scale-popup" id="scale-popup" aria-hidden="true">
+                        <div class="scale-popup-header">
+                            <span>Scale</span>
+                            <button class="mini-btn" id="scale-close" type="button">Close</button>
+                        </div>
+                        <div class="scale-root-row" id="scale-root-btns" aria-label="Scale root"></div>
+                        <div class="scale-option-list" id="scale-option-list" aria-label="Scale options"></div>
+                    </div>
+                    <p class="section-title tool-title">Tools Pattern</p>
+                    <div class="button-row tool-row">
+                        <button class="btn-tool" id="randomBtn" type="button">Random</button>
+                        <button class="btn-tool" id="clearBtn" type="button">Clear</button>
+                        <button class="btn-tool" id="copyBtn" type="button">Copy</button>
+                        <button class="btn-tool" id="pasteBtn" type="button">Paste</button>
+                    </div>
+                    <div class="random-role-row" id="random-role-btns" aria-label="Random role">
+                        <button class="btn-role active" type="button" data-random-role="generate">Generate</button>
+                        <button class="btn-role" type="button" data-random-role="mutate">Mutate</button>
+                        <button class="btn-role" type="button" data-random-role="fill">Fill</button>
+                    </div>
+                    <div class="pitch-generator-panel" id="pitch-generator-panel" aria-label="Pitch generator controls">
+                        <button class="generator-summary" id="generator-summary-btn" type="button" aria-expanded="false" aria-controls="generator-detail">
+                            Generator: Explore / Bass / Root Pulse
+                        </button>
+                        <div class="generator-detail" id="generator-detail" hidden>
+                            <div class="generator-row" id="generator-mode-btns" aria-label="Generator mode">
+                                <button class="btn-role active" type="button" data-generator-mode="explore">Explore</button>
+                                <button class="btn-role" type="button" data-generator-mode="structured">Structured</button>
+                            </div>
+                            <div class="generator-row" id="generator-role-btns" aria-label="Generator role">
+                                <button class="btn-role active" type="button" data-generator-role="bass">Bass</button>
+                                <button class="btn-role" type="button" data-generator-role="melody">Melody</button>
+                                <button class="btn-role" type="button" data-generator-role="mono">Mono</button>
+                            </div>
+                            <div class="generator-style-row" id="generator-style-btns" aria-label="Generator style"></div>
+                        </div>
+                    </div>
+                </div>
+
+                
+            </section>
+        </section>
+
+        <section id="center-panel" aria-label="Visual preview and pattern launch">
+            <section id="canvas-container" aria-label="Reactive visual output">
+                <canvas id="visual-canvas"></canvas>
+                <div id="syntetika-logo" class="syntetika-logo" aria-label="Syntetika logo">
+                    <!-- Ganti dengan <img src="sintetika-logo.png" class="logo-img"> jika punya file gambar -->
+                    <svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg" class="logo-svg">
+                        <defs>
+                            <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#8ebf24"/>
+                                <stop offset="50%" stop-color="#4a9eff"/>
+                                <stop offset="100%" stop-color="#8ebf24"/>
+                            </linearGradient>
+                        </defs>
+                        <!-- Icon waveform line-art -->
+                        <g stroke="url(#logo-grad)" stroke-width="1.2" fill="none" opacity="0.6">
+                            <path d="M30,70 Q40,40 50,70 Q60,100 70,70 Q80,40 90,70 Q100,100 110,70" />
+                            <path d="M110,70 Q120,50 130,70 Q140,90 150,70 Q160,50 170,70" opacity="0.4"/>
+                            <circle cx="190" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                            <circle cx="210" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                            <circle cx="230" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                        </g>
+                        <!-- Garis horizontal -->
+                        <line x1="30" y1="82" x2="370" y2="82" stroke="url(#logo-grad)" stroke-width="0.5" opacity="0.25"/>
+                        <!-- Teks utama -->
+                        <text x="200" y="72" text-anchor="middle" fill="none" stroke="url(#logo-grad)" stroke-width="1.5" font-family="monospace" font-size="40" font-weight="900" letter-spacing="10">SYNTETIKA</text>
+                        <!-- Subteks -->
+                        <text x="200" y="100" text-anchor="middle" fill="#4a9eff" opacity="0.25" font-family="monospace" font-size="9" letter-spacing="8">ENGINE</text>
+                    </svg>
+                </div>
+                <div id="shader-controls" class="shader-controls"></div>
+                <div class="file-control" id="file-control">
+                    <button class="monitor-badge file-toggle" id="file-menu-toggle" type="button" aria-expanded="false" aria-controls="file-menu">File</button>
+                    <div class="file-menu" id="file-menu" aria-hidden="true">
+                        <button type="button" data-file-action="save">Save</button>
+                        <button type="button" data-file-action="save-as">Save As</button>
+                        <button type="button" data-file-action="open">Open</button>
+                        <button type="button" data-file-action="preferences">Preferences</button>
+                        <button type="button" data-file-action="help">Help</button>
+                    </div>
+                    <input id="project-open-input" type="file" accept="application/json,.json" hidden>
+                </div>
+                <div class="visual-badge-row">
+                    <button class="monitor-badge visual-toggle" id="visual-toggle" type="button" data-visual-toggle>Visual: On</button>
+                    <span class="fps-counter" id="fps-counter">-- FPS</span>
+                    <button class="monitor-badge popup-visual-btn" id="popup-visual-btn" type="button">Pop Up Visual</button>
+                </div>
+                <div class="aspect-control">
+                    <button class="monitor-badge aspect-toggle" id="aspect-toggle" type="button" aria-expanded="false" aria-controls="aspect-menu">Aspect: Fill</button>
+                    <div class="aspect-menu" id="aspect-menu" aria-hidden="true">
+                        <button type="button" data-visual-aspect="fill">Fill</button>
+                        <button type="button" data-visual-aspect="16-9">16:9</button>
+                        <button type="button" data-visual-aspect="4-3">4:3</button>
+                        <button type="button" data-visual-aspect="1-1">1:1</button>
+                        <button type="button" data-visual-aspect="9-16">9:16</button>
+                        <button type="button" data-visual-aspect="custom">Custom</button>
+                        <div class="aspect-custom-row" aria-label="Custom aspect ratio">
+                            <input id="aspect-custom-width" type="number" min="1" max="9999" value="1920" aria-label="Custom aspect width">
+                            <span>:</span>
+                            <input id="aspect-custom-height" type="number" min="1" max="9999" value="1080" aria-label="Custom aspect height">
+                        </div>
+                        <button type="button" id="aspect-custom-apply">Apply Custom</button>
+                    </div>
+                </div>
+                </section>
+            <section class="pattern-launch-card" aria-label="Pattern Matrix">
+                <div id="pattern-matrix-host"></div>
+            </section>
+        </section>
+
+        <section id="right-panel" aria-label="Shader gallery and controls">
+            <div id="shader-gallery-host" class="visual-side-card"></div>
+            <div id="visual-preset-status"></div>
+        </section>
+    </main>
+</body>
+</html>

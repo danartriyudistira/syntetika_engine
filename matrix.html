@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Syntetika Engine Matrix Control</title>
+    <link rel="stylesheet" href="matrix.css?v=20260524-matrix-control">
+</head>
+<body>
+    <main class="matrix-app">
+        <header class="matrix-header">
+            <div>
+                <p class="section-title">Pattern Matrix</p>
+                <h1>Matrix Control</h1>
+            </div>
+            <div class="matrix-actions">
+                <div class="matrix-state" id="matrix-state">Syncing</div>
+                <button class="matrix-mini" id="sync-btn" type="button">Sync</button>
+                <button class="matrix-mini" id="fullscreen-btn" type="button">Fullscreen</button>
+            </div>
+        </header>
+
+        <section class="matrix-transport" aria-label="Master transport">
+            <button class="transport-play" id="matrix-play" type="button">Play</button>
+            <button type="button" data-transport-command="bpm-delta" data-value="-1">BPM -</button>
+            <div class="matrix-bpm" aria-live="polite">
+                <strong id="matrix-bpm">120</strong>
+                <span>BPM</span>
+            </div>
+            <button type="button" data-transport-command="bpm-delta" data-value="1">BPM +</button>
+            <button type="button" data-transport-command="tap-tempo">Tap Tempo</button>
+            <button type="button" data-transport-command="resync">Resync</button>
+            <button type="button" data-transport-command="nudge" data-value="-1">Nudge -</button>
+            <button type="button" data-transport-command="nudge" data-value="1">Nudge +</button>
+        </section>
+
+        <section class="matrix-audio" id="matrix-audio" aria-label="Internal audio and instrument sound">
+            <button class="matrix-audio-toggle" type="button" data-audio-toggle-active>Drum On</button>
+            <div class="matrix-sound-groups">
+                <div class="matrix-sound-row" data-sound-group="drum">
+                    <button type="button" data-sound-kind="drum" data-sound-style="default">Default</button>
+                    <button type="button" data-sound-kind="drum" data-sound-style="glitch">Glitch</button>
+                    <button type="button" data-sound-kind="drum" data-sound-style="noise">Noise</button>
+                    <button type="button" data-sound-kind="drum" data-sound-style="abstract">Abstract</button>
+                </div>
+
+                <div class="matrix-sound-row" data-sound-group="bass" hidden>
+                    <button type="button" data-sound-kind="bass" data-sound-style="default">Default</button>
+                    <button type="button" data-sound-kind="bass" data-sound-style="sub">Sub</button>
+                    <button type="button" data-sound-kind="bass" data-sound-style="acid">Acid</button>
+                    <button type="button" data-sound-kind="bass" data-sound-style="pluck">Pluck</button>
+                </div>
+
+                <div class="matrix-sound-row" data-sound-group="melody" hidden>
+                    <button type="button" data-sound-kind="melody" data-sound-style="default">Default</button>
+                    <button type="button" data-sound-kind="melody" data-sound-style="bell">Bell</button>
+                    <button type="button" data-sound-kind="melody" data-sound-style="lead">Lead</button>
+                    <button type="button" data-sound-kind="melody" data-sound-style="pad">Pad</button>
+                </div>
+
+                <div class="matrix-sound-row" data-sound-group="other" hidden>
+                    <button type="button" data-sound-kind="other" data-sound-style="moog">Moog Bass</button>
+                    <button type="button" data-sound-kind="other" data-sound-style="plucky">Plucky</button>
+                    <button type="button" data-sound-kind="other" data-sound-style="stabby">Stabby</button>
+                    <button type="button" data-sound-kind="other" data-sound-style="fm">FM</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="matrix-grid" id="matrix-grid" aria-label="Fullscreen pattern matrix">
+            <div class="matrix-row all-row" aria-label="All preset trigger">
+                <span class="matrix-label">All Presets</span>
+                <button type="button" data-global-preset="0">1</button>
+                <button type="button" data-global-preset="1">2</button>
+                <button type="button" data-global-preset="2">3</button>
+                <button type="button" data-global-preset="3">4</button>
+                <button type="button" data-global-preset="4">5</button>
+                <button type="button" data-global-preset="5">6</button>
+                <button type="button" data-global-preset="6">7</button>
+                <button type="button" data-global-preset="7">8</button>
+            </div>
+
+            <div class="matrix-row" data-pattern-row="other">
+                <button class="matrix-label" type="button" data-mode-select="other">Mono</button>
+                <button type="button" data-preset-kind="other" data-preset="0">P1</button>
+                <button type="button" data-preset-kind="other" data-preset="1">P2</button>
+                <button type="button" data-preset-kind="other" data-preset="2">P3</button>
+                <button type="button" data-preset-kind="other" data-preset="3">P4</button>
+                <button type="button" data-preset-kind="other" data-preset="4">P5</button>
+                <button type="button" data-preset-kind="other" data-preset="5">P6</button>
+                <button type="button" data-preset-kind="other" data-preset="6">P7</button>
+                <button type="button" data-preset-kind="other" data-preset="7">P8</button>
+            </div>
+
+            <div class="matrix-row" data-pattern-row="melody">
+                <button class="matrix-label" type="button" data-mode-select="melody">Melody</button>
+                <button type="button" data-preset-kind="melody" data-preset="0">P1</button>
+                <button type="button" data-preset-kind="melody" data-preset="1">P2</button>
+                <button type="button" data-preset-kind="melody" data-preset="2">P3</button>
+                <button type="button" data-preset-kind="melody" data-preset="3">P4</button>
+                <button type="button" data-preset-kind="melody" data-preset="4">P5</button>
+                <button type="button" data-preset-kind="melody" data-preset="5">P6</button>
+                <button type="button" data-preset-kind="melody" data-preset="6">P7</button>
+                <button type="button" data-preset-kind="melody" data-preset="7">P8</button>
+            </div>
+
+            <div class="matrix-row" data-pattern-row="bass">
+                <button class="matrix-label" type="button" data-mode-select="bass">Bassline</button>
+                <button type="button" data-preset-kind="bass" data-preset="0">P1</button>
+                <button type="button" data-preset-kind="bass" data-preset="1">P2</button>
+                <button type="button" data-preset-kind="bass" data-preset="2">P3</button>
+                <button type="button" data-preset-kind="bass" data-preset="3">P4</button>
+                <button type="button" data-preset-kind="bass" data-preset="4">P5</button>
+                <button type="button" data-preset-kind="bass" data-preset="5">P6</button>
+                <button type="button" data-preset-kind="bass" data-preset="6">P7</button>
+                <button type="button" data-preset-kind="bass" data-preset="7">P8</button>
+            </div>
+
+            <div class="matrix-row" data-pattern-row="drum">
+                <button class="matrix-label" type="button" data-mode-select="drum">Drums</button>
+                <button type="button" data-preset-kind="drum" data-preset="0">P1</button>
+                <button type="button" data-preset-kind="drum" data-preset="1">P2</button>
+                <button type="button" data-preset-kind="drum" data-preset="2">P3</button>
+                <button type="button" data-preset-kind="drum" data-preset="3">P4</button>
+                <button type="button" data-preset-kind="drum" data-preset="4">P5</button>
+                <button type="button" data-preset-kind="drum" data-preset="5">P6</button>
+                <button type="button" data-preset-kind="drum" data-preset="6">P7</button>
+                <button type="button" data-preset-kind="drum" data-preset="7">P8</button>
+            </div>
+
+            <div class="matrix-row bank-row" aria-label="Bank trigger">
+                <span class="matrix-label">Bank</span>
+                <button type="button" data-bank="0">B1</button>
+                <button type="button" data-bank="1">B2</button>
+                <button type="button" data-bank="2">B3</button>
+                <button type="button" data-bank="3">B4</button>
+                <button type="button" data-bank="4">B5</button>
+                <button type="button" data-bank="5">B6</button>
+                <button type="button" data-bank="6">B7</button>
+                <button type="button" data-bank="7">B8</button>
+            </div>
+        </section>
+    </main>
+    <script type="module" src="matrix.js?v=20260524-matrix-control"></script>
+</body>
+</html>

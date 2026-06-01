@@ -1,0 +1,19 @@
+/*{
+  "CATEGORIES": ["Audio"],
+  "INPUTS": [
+    {"NAME": "rate", "TYPE": "float", "MIN": 0.1, "MAX": 4, "DEFAULT": 1}
+  ]
+}*/
+void main() {
+    vec2 uv = gl_FragCoord.xy / RENDERSIZE;
+    float trig = u_trigger_drum + u_trigger_bass + u_trigger_melody + u_trigger_other;
+    float triggerStrobe = step(0.5, mod(trig + TIME * 4.0 * rate, 2.0)) * trig * 2.0;
+    float grid = floor(uv.x * 16.0) + floor(uv.y * 12.0);
+    float flash = mod(grid + floor(TIME * 8.0 * u_bass * rate), 2.0);
+    float flicker = step(0.5, sin(TIME * 12.0 * rate + u_high * 10.0 + trig * 20.0));
+    float value = mix(flash, 1.0, flicker * 0.3);
+    value = max(value, triggerStrobe);
+    vec3 col = vec3(value * (0.5 + u_bass * 0.5));
+    col += vec3(u_trigger_other * 0.5, value * u_bass * 0.2 + u_trigger_bass * 0.4, value * u_high * 0.3 + u_trigger_melody * 0.4);
+    gl_FragColor = vec4(col, 1.0);
+}
