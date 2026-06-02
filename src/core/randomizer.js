@@ -99,9 +99,11 @@ export class Randomizer {
 
         for (let i = 0; i < 8; i += 1) {
             const step = randomInt(0, pattern.length - 1);
+            const existing = pattern[step];
             pattern[step] = {
-                active: Math.random() < 0.55 ? !pattern[step].active : pattern[step].active,
-                note: Math.random() < 0.45 ? pickNote(notePool) : pattern[step].note
+                active: Math.random() < 0.55 ? !existing.active : existing.active,
+                note: Math.random() < 0.45 ? pickNote(notePool) : existing.note,
+                tie: existing.tie === true
             };
         }
     }
@@ -125,7 +127,8 @@ export class Randomizer {
         for (let step = start; step < loopLength; step += 1) {
             pattern[step] = {
                 active: Math.random() < (mode === "other" ? 0.32 : 0.48),
-                note: pickNote(notePool)
+                note: pickNote(notePool),
+                tie: false
             };
         }
     }
@@ -153,7 +156,8 @@ export class Randomizer {
         for (let step = 0; step < pattern.length; step += 1) {
             pattern[step] = {
                 active: Math.random() < density,
-                note: pickNote(notePool)
+                note: pickNote(notePool),
+                tie: false
             };
         }
     }
@@ -167,7 +171,7 @@ export class Randomizer {
 
         // Reset pattern
         for (let step = 0; step < pattern.length; step += 1) {
-            pattern[step] = { active: false, note: baseNotes.root, velocity: 0x60 };
+            pattern[step] = { active: false, note: baseNotes.root, velocity: 0x60, tie: false };
         }
 
         // Build bass bars using the pattern cycling system
@@ -192,6 +196,7 @@ export class Randomizer {
                     note: noteName,
                     velocity: Math.min(127, Math.max(20, evt.velocity)),
                     ghost: evt.ghost || false,
+                    tie: false,
                 };
             });
 
@@ -210,7 +215,8 @@ export class Randomizer {
         for (let step = 0; step < pattern.length; step += 1) {
             pattern[step] = {
                 active: false,
-                note: notes.tonic
+                note: notes.tonic,
+                tie: false
             };
         }
 
@@ -218,7 +224,7 @@ export class Randomizer {
         for (let step = 0; step < safeLoopLength; step += 1) {
             const event = melodyEventForStep(style, smoothedMotif, notes, step, lastNote);
             if (!event) continue;
-            pattern[step] = event;
+            pattern[step] = { ...event, tie: false };
             lastNote = event.note;
         }
 
@@ -232,7 +238,8 @@ export class Randomizer {
         for (let step = 0; step < pattern.length; step += 1) {
             pattern[step] = {
                 active: false,
-                note: notes.root
+                note: notes.root,
+                tie: false
             };
         }
 
@@ -240,7 +247,7 @@ export class Randomizer {
         for (let step = 0; step < safeLoopLength; step += 1) {
             const event = monoEventForStep(style, notes, step, lastNote);
             if (!event) continue;
-            pattern[step] = event;
+            pattern[step] = { ...event, tie: false };
             lastNote = event.note;
         }
     }
@@ -606,7 +613,7 @@ function fillStructuredBass(pattern, { style = "root-pulse", loopLength = 64, sc
         const chordOffset = chordOffsetForBar(genre, bar);
         const notes = chordOffset ? offsetNoteSet(baseNotes, chordOffset) : baseNotes;
         const note = structuredBassNote(style, notes, index, localStep, bar, lastNote);
-        pattern[start + localStep] = { active: true, note };
+        pattern[start + localStep] = { active: true, note, tie: false };
         lastNote = note;
     });
 }
@@ -773,9 +780,10 @@ function fillStructuredMelody(pattern, { style = "motif", loopLength = 64, scale
         if (start + localStep >= safeLoopLength) return;
         const event = melodyEventForStep(style, smoothedMotif, notes, start + localStep, lastNote) || {
             active: true,
-            note: motif[index % motif.length] || pickNote(notes.upper)
+            note: motif[index % motif.length] || pickNote(notes.upper),
+            tie: false
         };
-        pattern[start + localStep] = event;
+        pattern[start + localStep] = { ...event, tie: false };
         lastNote = event.note;
     });
 }
@@ -926,9 +934,10 @@ function fillStructuredMono(pattern, { style = "stab", loopLength = 64, scale = 
         if (start + localStep >= safeLoopLength) return;
         const event = monoEventForStep(style, notes, start + localStep, lastNote) || {
             active: true,
-            note: pickNote(notes.color)
+            note: pickNote(notes.color),
+            tie: false
         };
-        pattern[start + localStep] = event;
+        pattern[start + localStep] = { ...event, tie: false };
         lastNote = event.note;
     });
 }
@@ -1267,7 +1276,8 @@ function applyPhraseRepeat(pattern, loopLength) {
         const noteMidi = noteNameToMidi(src.note) + transpose;
         pattern[step] = {
             active: src.active,
-            note: midiNoteName(Math.max(0, Math.min(127, noteMidi)))
+            note: midiNoteName(Math.max(0, Math.min(127, noteMidi))),
+            tie: src.tie === true
         };
     }
 }
@@ -1314,12 +1324,13 @@ function mutateAnchoredPattern(pattern, anchors, noteForStep, count) {
     if (!anchors.length) return;
     for (let i = 0; i < count; i += 1) {
         const step = anchors[randomInt(0, anchors.length - 1)];
-        const current = pattern[step] || { active: false, note: noteForStep(step, i), velocity: 0x60 };
+        const current = pattern[step] || { active: false, note: noteForStep(step, i), velocity: 0x60, tie: false };
         const newNote = noteForStep(step, i);
         pattern[step] = {
             active: Math.random() < 0.35 ? !current.active : true,
             note: Math.random() < 0.7 ? newNote : current.note,
             velocity: current.velocity || 0x60,
+            tie: current.tie === true,
         };
     }
 }

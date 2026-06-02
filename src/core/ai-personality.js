@@ -630,6 +630,79 @@ export function formatCompositionPlanAsText(plan) {
     ].join("\n");
 }
 
+export const SHADER_SYSTEM_PROMPT = `You are a GLSL shader programming assistant for Syntetika Engine.
+Your role is to help users understand, modify, and create ISF (Interactive Shader Format) shaders.
+
+Capabilities:
+- Explain what a shader does by reading its ISF metadata and GLSL code
+- Suggest modifications for visual effects (glow, blur, color shifts, distortion, etc.)
+- Help debug compilation errors
+- Optimize shader performance
+- Generate new shader variations
+
+When modifying code:
+- Preserve the ISF metadata block (the /*{ ... }*/ comment at the top)
+- Keep existing INPUTS unless the user asks to change them
+- Add helper functions at the top, before main()
+- Only modify gl_FragColor and pixel logic
+- Use isf_FragNormCoord for normalized coordinates
+- Use RENDERSIZE for dimensions
+- Use TIME for animation
+- Explain what you changed and why`;
+
+const SHADER_TOPICS = {
+    glow: {
+        keywords: ["glow", "bloom", "shine", "light"],
+        response: "To add a glow effect, you can sample neighboring pixels and blend: sample the fragment at multiple offsets (e.g., 4–8 taps in a cross pattern), accumulate the brightness, then add it to the original color. Use a threshold to only glow bright areas. Example: accumulate += texture2D(inputImage, uv + vec2(offset, 0.0)) * brightness;"
+    },
+    edge: {
+        keywords: ["edge", "outline", "detect", "border", "sobel"],
+        response: "Edge detection uses the difference between neighboring pixels. A Sobel operator convolves with 3x3 kernels for horizontal and vertical gradients: float gx = -tl - 2*l - bl + tr + 2*r + br; float gy = -tl - 2*t - tr + bl + 2*b + br; Then edge = sqrt(gx*gx + gy*gy)."
+    },
+    blur: {
+        keywords: ["blur", "smooth", "gaussian", "soften"],
+        response: "Gaussian blur samples pixels in a weighted radius. For a 9-tap blur: sample at offsets -4,-3,-2,-1,0,1,2,3,4 with gaussian weights [0.016,0.054,0.122,0.195,0.226,0.195,0.122,0.054,0.016]. Normalize weights to sum to 1.0. For performance, blur horizontally then vertically in two passes."
+    },
+    color: {
+        keywords: ["color", "hue", "saturation", "tint", "palette"],
+        response: "To shift colors, convert RGB to HSV, modify hue/saturation/value, then convert back. vec3 rgb2hsv(vec3 c) { ... } / vec3 hsv2rgb(vec3 c) { ... }. For tinting: mix the original color with a target color using a blend factor."
+    },
+    distortion: {
+        keywords: ["distort", "warp", "twirl", "wave", "ripple"],
+        response: "Distortion effects modify UV coordinates before sampling. Twirl: rotate UV around center by an angle proportional to distance from center. Wave: add sin(time + uv.y * frequency) * amplitude to uv.x. Ripple: concentric rings from center with animated phase."
+    },
+};
+
+export function getShaderSuggestion(input) {
+    const lower = input.toLowerCase();
+    for (const [, topic] of Object.entries(SHADER_TOPICS)) {
+        for (const kw of topic.keywords) {
+            if (lower.includes(kw)) return topic.response;
+        }
+    }
+    return null;
+}
+
+export function explainShaderStructure(source) {
+    const lines = source.split("\n");
+    const metaEnd = source.indexOf("*/");
+    const metaBlock = metaEnd > 0 ? source.slice(0, metaEnd + 2) : "";
+    const hasMain = source.includes("void main");
+    const hasGlFragColor = source.includes("gl_FragColor");
+    const uniforms = (metaBlock.match(/"NAME":\s*"([^"]+)"/g) || []).map(m => m.replace(/"NAME":\s*"/, "").replace(/"$/, ""));
+    const categories = (metaBlock.match(/"CATEGORIES":\s*\[([^\]]+)\]/) || [])[1] || "";
+    const imageInputs = metaBlock.includes('"TYPE": "image"');
+    return {
+        lineCount: lines.length,
+        hasMain,
+        hasGlFragColor,
+        uniforms,
+        categories: categories.replace(/"/g, "").split(",").map(s => s.trim()).filter(Boolean),
+        imageInputs,
+        isValid: hasMain && hasGlFragColor,
+    };
+}
+
 export function generateWelcomeMessage() {
     return [
         `═══ SYNTHeTIKA AI Music Producer ═══`,

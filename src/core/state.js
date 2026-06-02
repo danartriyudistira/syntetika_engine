@@ -28,6 +28,30 @@ import {
 import { createResolumeConfigDefaults, normalizeResolumeConfig } from "./resolume.js";
 
 export function loadState() {
+    try {
+        return normalizeState(JSON.parse(localStorage.getItem(STORAGE_KEY)));
+    } catch {
+        return normalizeState(null);
+    }
+}
+
+const STATE_KEYS = new Set([
+    "bpm","mode","uiMode","internalAudio","presetTrackRates","mixer",
+    "drumSound","bassSound","melodySound","otherSound",
+    "activeBanks","activeSlots","presetLoopLengths",
+    "drumPage","drumFollowPage","drumVoices",
+    "bassPage","bassFollowPage","melodyPage","melodyFollowPage",
+    "otherPage","otherFollowPage",
+    "editMode","melodyEditMode","otherEditMode",
+    "tieMode","drumRandomGenre","noteScale","noteRoot",
+    "notePickerOctaves","randomRole",
+    "pitchGeneratorModes","pitchGeneratorRoles","pitchGeneratorStyles",
+    "resolume","memory",
+    "activeShaderId","visualPresets","visualEnabled","visualAspect","visualAspectWidth","visualAspectHeight",
+    "projectName"
+]);
+
+export function normalizeState(saved) {
     const defaults = {
         bpm: 120,
         mode: "drum",
@@ -54,6 +78,7 @@ export function loadState() {
         editMode: false,
         melodyEditMode: false,
         otherEditMode: false,
+        tieMode: { bass: false, melody: false, other: false },
         drumRandomGenre: "default",
         noteScale: "chromatic",
         noteRoot: "C",
@@ -63,7 +88,8 @@ export function loadState() {
         pitchGeneratorRoles: createPitchGeneratorRoleMap(),
         pitchGeneratorStyles: createPitchGeneratorStyleMap(),
         resolume: createResolumeConfigDefaults(),
-        memory: createEmptyMemory()
+        memory: createEmptyMemory(),
+        projectName: "Untitled"
     };
 
     const shaderDefaults = {
@@ -71,103 +97,106 @@ export function loadState() {
         visualPresets: Array.from({ length: 8 }, () => null),
         visualEnabled: true,
         visualAspect: "fill",
+        visualAspectWidth: 1920,
+        visualAspectHeight: 1080,
     };
 
-    try {
-        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-        if (!saved) return { ...defaults, ...shaderDefaults };
+    if (!saved || typeof saved !== "object") return { ...defaults, ...shaderDefaults };
 
-        // First pass: normalize bank/slot selectors and memory
-        const activeBanks = normalizeSelectorMap(saved.activeBanks, saved.activeBank, BANK_COUNT);
-        const activeSlots = normalizeSelectorMap(saved.activeSlots, saved.activeSlot, PRESET_COUNT);
-        const memory = normalizeMemory(saved.memory);
+    // First pass: normalize bank/slot selectors and memory
+    const activeBanks = normalizeSelectorMap(saved.activeBanks, saved.activeBank, BANK_COUNT);
+    const activeSlots = normalizeSelectorMap(saved.activeSlots, saved.activeSlot, PRESET_COUNT);
+    const memory = normalizeMemory(saved.memory);
 
-        // Per-preset loop lengths with legacy migration from old global keys
-        const hasLegacyLoops = "drumLoopLen" in saved || "bassLoopLen" in saved;
-        const presetLoopLengths = createPresetLoopLengths();
-        SEQUENCER_MODES.forEach((mode) => {
-            const allowed = mode === "drum" ? [16, 32, 64] : [16, 32, 64, 128, 256];
-            const defaultVal = mode === "drum" ? 16 : 64;
-            for (let bank = 0; bank < BANK_COUNT; bank += 1) {
-                for (let slot = 0; slot < PRESET_COUNT; slot += 1) {
-                    let value;
-                    if (saved.presetLoopLengths?.[mode]?.[bank]?.[slot] !== undefined) {
-                        value = saved.presetLoopLengths[mode][bank][slot];
-                    } else if (hasLegacyLoops) {
-                        const key = mode === "drum" ? "drumLoopLen" : `${mode}LoopLen`;
-                        value = saved[key];
-                    }
-                    presetLoopLengths[mode][bank][slot] = allowed.includes(value) ? value : defaultVal;
+    // Per-preset loop lengths with legacy migration from old global keys
+    const hasLegacyLoops = "drumLoopLen" in saved || "bassLoopLen" in saved;
+    const presetLoopLengths = createPresetLoopLengths();
+    SEQUENCER_MODES.forEach((mode) => {
+        const allowed = mode === "drum" ? [16, 32, 64] : [16, 32, 64, 128, 256];
+        const defaultVal = mode === "drum" ? 16 : 64;
+        for (let bank = 0; bank < BANK_COUNT; bank += 1) {
+            for (let slot = 0; slot < PRESET_COUNT; slot += 1) {
+                let value;
+                if (saved.presetLoopLengths?.[mode]?.[bank]?.[slot] !== undefined) {
+                    value = saved.presetLoopLengths[mode][bank][slot];
+                } else if (hasLegacyLoops) {
+                    const key = mode === "drum" ? "drumLoopLen" : `${mode}LoopLen`;
+                    value = saved[key];
                 }
+                presetLoopLengths[mode][bank][slot] = allowed.includes(value) ? value : defaultVal;
             }
-        });
+        }
+    });
 
-        // Per-preset track rates with legacy migration
-        const hasLegacyRates = "trackRates" in saved;
-        const presetTrackRates = createPresetTrackRates();
-        SEQUENCER_MODES.forEach((mode) => {
-            for (let bank = 0; bank < BANK_COUNT; bank += 1) {
-                for (let slot = 0; slot < PRESET_COUNT; slot += 1) {
-                    let value;
-                    if (saved.presetTrackRates?.[mode]?.[bank]?.[slot] !== undefined) {
-                        value = saved.presetTrackRates[mode][bank][slot];
-                    } else if (hasLegacyRates) {
-                        value = saved.trackRates?.[mode];
-                    }
-                    presetTrackRates[mode][bank][slot] = [0.5, 1, 2].includes(value) ? value : 1;
+    // Per-preset track rates with legacy migration
+    const hasLegacyRates = "trackRates" in saved;
+    const presetTrackRates = createPresetTrackRates();
+    SEQUENCER_MODES.forEach((mode) => {
+        for (let bank = 0; bank < BANK_COUNT; bank += 1) {
+            for (let slot = 0; slot < PRESET_COUNT; slot += 1) {
+                let value;
+                if (saved.presetTrackRates?.[mode]?.[bank]?.[slot] !== undefined) {
+                    value = saved.presetTrackRates[mode][bank][slot];
+                } else if (hasLegacyRates) {
+                    value = saved.trackRates?.[mode];
                 }
+                presetTrackRates[mode][bank][slot] = [0.5, 1, 2].includes(value) ? value : 1;
             }
-        });
+        }
+    });
 
-        // Compute page loop lengths from the active preset
-        const drumLoopForPage = presetLoopLengths.drum[activeBanks.drum][activeSlots.drum];
-        const bassLoopForPage = presetLoopLengths.bass[activeBanks.bass][activeSlots.bass];
-        const melodyLoopForPage = presetLoopLengths.melody[activeBanks.melody][activeSlots.melody];
-        const otherLoopForPage = presetLoopLengths.other[activeBanks.other][activeSlots.other];
+    // Compute page loop lengths from the active preset
+    const drumLoopForPage = presetLoopLengths.drum[activeBanks.drum][activeSlots.drum];
+    const bassLoopForPage = presetLoopLengths.bass[activeBanks.bass][activeSlots.bass];
+    const melodyLoopForPage = presetLoopLengths.melody[activeBanks.melody][activeSlots.melody];
+    const otherLoopForPage = presetLoopLengths.other[activeBanks.other][activeSlots.other];
 
-        return {
-            ...defaults,
-            ...saved,
-            // Override spread with properly normalized values
-            presetLoopLengths,
-            presetTrackRates,
-            activeBanks,
-            activeSlots,
-            memory,
-            uiMode: ["edit", "performance"].includes(saved.uiMode) ? saved.uiMode : defaults.uiMode,
-            internalAudio: normalizeBooleanMap(saved.internalAudio, defaults.internalAudio),
-            mixer: normalizeMixer(saved.mixer, defaults.mixer),
-            drumSound: DRUM_SOUND_STYLES.includes(saved.drumSound) ? saved.drumSound : defaults.drumSound,
-            bassSound: BASS_SOUND_STYLES.includes(saved.bassSound) ? saved.bassSound : defaults.bassSound,
-            melodySound: MELODY_SOUND_STYLES.includes(saved.melodySound) ? saved.melodySound : defaults.melodySound,
-            otherSound: OTHER_SOUND_STYLES.includes(saved.otherSound) ? saved.otherSound : defaults.otherSound,
-            drumRandomGenre: isDrumGenreId(saved.drumRandomGenre) ? saved.drumRandomGenre : defaults.drumRandomGenre,
-            noteScale: isScaleId(saved.noteScale) ? saved.noteScale : defaults.noteScale,
-            noteRoot: MIDI_NOTE_NAMES.includes(saved.noteRoot) ? saved.noteRoot : defaults.noteRoot,
-            notePickerOctaves: normalizeNotePickerOctaves(saved.notePickerOctaves, defaults.notePickerOctaves),
-            randomRole: ["generate", "mutate", "fill"].includes(saved.randomRole) ? saved.randomRole : defaults.randomRole,
-            pitchGeneratorModes: normalizePitchGeneratorModes(saved.pitchGeneratorModes, defaults.pitchGeneratorModes),
-            pitchGeneratorRoles: normalizePitchGeneratorRoles(saved.pitchGeneratorRoles, defaults.pitchGeneratorRoles),
-            pitchGeneratorStyles: normalizePitchGeneratorStyles(saved.pitchGeneratorStyles, defaults.pitchGeneratorStyles),
-            resolume: normalizeResolumeConfig(saved.resolume, defaults.resolume),
-            // Page normalization using active preset's loop length
-            drumPage: normalizeDrumPage(saved.drumPage, drumLoopForPage),
-            drumFollowPage: typeof saved.drumFollowPage === "boolean" ? saved.drumFollowPage : defaults.drumFollowPage,
-            drumVoices: normalizeDrumVoices(saved.drumVoices, defaults.drumVoices),
-            bassPage: normalizeNotePage(saved.bassPage, bassLoopForPage),
-            bassFollowPage: typeof saved.bassFollowPage === "boolean" ? saved.bassFollowPage : defaults.bassFollowPage,
-            melodyPage: normalizeNotePage(saved.melodyPage, melodyLoopForPage),
-            melodyFollowPage: typeof saved.melodyFollowPage === "boolean" ? saved.melodyFollowPage : defaults.melodyFollowPage,
-            otherPage: normalizeNotePage(saved.otherPage, otherLoopForPage),
-            otherFollowPage: typeof saved.otherFollowPage === "boolean" ? saved.otherFollowPage : defaults.otherFollowPage,
-            activeShaderId: typeof saved.activeShaderId === "string" ? saved.activeShaderId : shaderDefaults.activeShaderId,
-            visualPresets: normalizeVisualPresets(saved.visualPresets, shaderDefaults.visualPresets),
-            visualEnabled: typeof saved.visualEnabled === "boolean" ? saved.visualEnabled : shaderDefaults.visualEnabled,
-            visualAspect: ["fill", "16-9", "4-3", "1-1", "9-16", "custom"].includes(saved.visualAspect) ? saved.visualAspect : shaderDefaults.visualAspect,
-        };
-    } catch {
-        return { ...defaults, ...shaderDefaults };
-    }
+    return {
+        ...defaults,
+        // Only spread known keys from saved (ignore legacy keys that accumulated)
+        ...Object.fromEntries(
+            Object.entries(saved).filter(([key]) => STATE_KEYS.has(key))
+        ),
+        // Override spread with properly normalized values
+        presetLoopLengths,
+        presetTrackRates,
+        activeBanks,
+        activeSlots,
+        memory,
+        uiMode: ["edit", "performance"].includes(saved.uiMode) ? saved.uiMode : defaults.uiMode,
+        internalAudio: normalizeBooleanMap(saved.internalAudio, defaults.internalAudio),
+        mixer: normalizeMixer(saved.mixer, defaults.mixer),
+        drumSound: DRUM_SOUND_STYLES.includes(saved.drumSound) ? saved.drumSound : defaults.drumSound,
+        bassSound: BASS_SOUND_STYLES.includes(saved.bassSound) ? saved.bassSound : defaults.bassSound,
+        melodySound: MELODY_SOUND_STYLES.includes(saved.melodySound) ? saved.melodySound : defaults.melodySound,
+        otherSound: OTHER_SOUND_STYLES.includes(saved.otherSound) ? saved.otherSound : defaults.otherSound,
+        drumRandomGenre: isDrumGenreId(saved.drumRandomGenre) ? saved.drumRandomGenre : defaults.drumRandomGenre,
+        noteScale: isScaleId(saved.noteScale) ? saved.noteScale : defaults.noteScale,
+        noteRoot: MIDI_NOTE_NAMES.includes(saved.noteRoot) ? saved.noteRoot : defaults.noteRoot,
+        notePickerOctaves: normalizeNotePickerOctaves(saved.notePickerOctaves, defaults.notePickerOctaves),
+        randomRole: ["generate", "mutate", "fill"].includes(saved.randomRole) ? saved.randomRole : defaults.randomRole,
+        pitchGeneratorModes: normalizePitchGeneratorModes(saved.pitchGeneratorModes, defaults.pitchGeneratorModes),
+        pitchGeneratorRoles: normalizePitchGeneratorRoles(saved.pitchGeneratorRoles, defaults.pitchGeneratorRoles),
+        pitchGeneratorStyles: normalizePitchGeneratorStyles(saved.pitchGeneratorStyles, defaults.pitchGeneratorStyles),
+        resolume: normalizeResolumeConfig(saved.resolume, defaults.resolume),
+        // Page normalization using active preset's loop length
+        drumPage: normalizeDrumPage(saved.drumPage, drumLoopForPage),
+        drumFollowPage: typeof saved.drumFollowPage === "boolean" ? saved.drumFollowPage : defaults.drumFollowPage,
+        drumVoices: normalizeDrumVoices(saved.drumVoices, defaults.drumVoices),
+        bassPage: normalizeNotePage(saved.bassPage, bassLoopForPage),
+        bassFollowPage: typeof saved.bassFollowPage === "boolean" ? saved.bassFollowPage : defaults.bassFollowPage,
+        melodyPage: normalizeNotePage(saved.melodyPage, melodyLoopForPage),
+        melodyFollowPage: typeof saved.melodyFollowPage === "boolean" ? saved.melodyFollowPage : defaults.melodyFollowPage,
+        otherPage: normalizeNotePage(saved.otherPage, otherLoopForPage),
+        otherFollowPage: typeof saved.otherFollowPage === "boolean" ? saved.otherFollowPage : defaults.otherFollowPage,
+        tieMode: normalizeTieMode(saved.tieMode, defaults.tieMode),
+        activeShaderId: typeof saved.activeShaderId === "string" ? saved.activeShaderId : shaderDefaults.activeShaderId,
+        visualPresets: normalizeVisualPresets(saved.visualPresets, shaderDefaults.visualPresets),
+        visualEnabled: typeof saved.visualEnabled === "boolean" ? saved.visualEnabled : shaderDefaults.visualEnabled,
+        visualAspect: ["fill", "16-9", "4-3", "1-1", "9-16", "custom"].includes(saved.visualAspect) ? saved.visualAspect : shaderDefaults.visualAspect,
+        visualAspectWidth: Number.isFinite(Number(saved.visualAspectWidth)) ? Math.round(Number(saved.visualAspectWidth)) : shaderDefaults.visualAspectWidth,
+        visualAspectHeight: Number.isFinite(Number(saved.visualAspectHeight)) ? Math.round(Number(saved.visualAspectHeight)) : shaderDefaults.visualAspectHeight,
+    };
 }
 
 function createPresetLoopLengths() {
@@ -291,6 +320,13 @@ function normalizeMixer(savedMixer, defaults) {
     }, {});
     const allMuted = SEQUENCER_MODES.every((mode) => mixer[mode] <= 0);
     return allMuted ? { ...defaults } : mixer;
+}
+
+function normalizeTieMode(saved, defaults) {
+    if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+        return { bass: saved.bass === true, melody: saved.melody === true, other: saved.other === true };
+    }
+    return { ...defaults };
 }
 
 function normalizeVisualPresets(saved, defaults) {

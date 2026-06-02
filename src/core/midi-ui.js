@@ -33,6 +33,9 @@ export function createDefaultMidiConfig() {
     return {
         inputID: "",
         outputID: "",
+        clockOutput: false,
+        midiThrough: false,
+        syncSource: "internal",
         shaderTriggers: [],
         tracks: INSTRUMENTS.map((instrument) => ({
             id: instrument.id,
@@ -65,6 +68,9 @@ export function normalizeMidiConfig(saved, defaults = createDefaultMidiConfig())
     return {
         inputID: saved.inputID ?? firstSavedTrack?.inputID ?? firstLegacyTrack?.inputID ?? defaults.inputID,
         outputID: saved.outputID ?? firstSavedTrack?.outputID ?? firstLegacyTrack?.outputID ?? defaults.outputID,
+        clockOutput: saved.clockOutput === true,
+        midiThrough: saved.midiThrough === true,
+        syncSource: saved.syncSource === "midi-clock" ? "midi-clock" : "internal",
         shaderTriggers,
         tracks: defaults.tracks.map((track, index) => {
             const savedTrack = saved.tracks?.find((item) => item.id === track.id) || saved.tracks?.find((item) => item.id === legacyDrumId(track));
@@ -227,6 +233,48 @@ function renderDeviceRouting(container, inputs, outputs, midiConfig, saveMidi) {
     });
 
     container.append(inputField.field, outputField.field);
+
+    const clockToggle = createToggle("Clock Out", midiConfig.clockOutput);
+    clockToggle.addEventListener("change", () => {
+        midiConfig.clockOutput = clockToggle.checked;
+        saveMidi();
+    });
+    container.appendChild(clockToggle);
+
+    const throughToggle = createToggle("MIDI Through", midiConfig.midiThrough);
+    throughToggle.addEventListener("change", () => {
+        midiConfig.midiThrough = throughToggle.checked;
+        saveMidi();
+    });
+    container.appendChild(throughToggle);
+
+    const syncLabel = document.createElement("label");
+    syncLabel.className = "sync-source";
+    syncLabel.textContent = "Sync: ";
+    const syncSelect = document.createElement("select");
+    ["internal", "midi-clock"].forEach((val) => {
+        const opt = document.createElement("option");
+        opt.value = val;
+        opt.textContent = val === "internal" ? "Internal" : "MIDI Clock";
+        opt.selected = midiConfig.syncSource === val;
+        syncSelect.appendChild(opt);
+    });
+    syncSelect.addEventListener("change", () => {
+        midiConfig.syncSource = syncSelect.value;
+        saveMidi();
+    });
+    syncLabel.appendChild(syncSelect);
+    container.appendChild(syncLabel);
+}
+
+function createToggle(labelText, checked) {
+    const label = document.createElement("label");
+    label.className = "toggle-row";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = checked;
+    label.append(checkbox, document.createTextNode(" " + labelText));
+    return checkbox;
 }
 
 function createDeviceSelect(labelText, devices, value, ariaLabel) {

@@ -3,6 +3,16 @@ import { ShaderEngine } from "./shader-engine.js";
 let idCounter = 0;
 function nextCustomId() { return "custom_" + (++idCounter); }
 
+const NEW_SHADER_TEMPLATE = `/*{
+  "CATEGORIES": ["Custom"],
+  "INPUTS": []
+}*/
+void main() {
+    vec2 uv = isf_FragNormCoord;
+    vec3 color = vec3(uv.x, uv.y, 0.5);
+    gl_FragColor = vec4(color, 1.0);
+}`;
+
 const PLASMA_NAME = "Plasma";
 const PLASMA_SOURCE = `/*{
   "CATEGORIES": ["Plasma"],
@@ -154,13 +164,15 @@ export class ShaderEditor {
     constructor(options = {}) {
         this.onSwitch = options.onSwitch || (() => { });
         this.onShadersChange = options.onShadersChange || (() => { });
+        this.aiEngine = options.aiEngine || null;
         this.previewEngine = null;
         this.shaders = [];
         this.activeId = null;
         this.editorOpen = false;
         this.editingId = null;
-        this._fallbackSource = PLASMA_SOURCE;
+        this._fallbackSource = NEW_SHADER_TEMPLATE;
         this._shadersDirHandle = null;
+        this._galleryDropdownHandler = null;
     }
 
     async init() {
@@ -170,7 +182,9 @@ export class ShaderEditor {
             this.activeId = null;
         }
         if (this.shaders.length > 0) {
-            if (!this.activeId) this.activeId = this.shaders[0].id;
+            if (!this.activeId || !this.shaders.some(s => s.id === this.activeId)) {
+                this.activeId = this.shaders[0].id;
+            }
             this.onSwitch(this.activeId);
             return;
         }
@@ -219,6 +233,7 @@ export class ShaderEditor {
 
     setActive(id) {
         if (id === this.activeId) return;
+        if (!this.shaders.some(s => s.id === id)) return;
         this.activeId = id;
         this.saveToStorage();
         this.onSwitch(id);
@@ -228,21 +243,20 @@ export class ShaderEditor {
         const id = nextCustomId();
         this.shaders.push({ id, name, source });
         this.saveToStorage();
-        this.onShadersChange();
         return id;
     }
 
     removeShader(id) {
-        if (this.shaders.length <= 1) return;
+        if (this.shaders.length <= 1) return false;
         const idx = this.shaders.findIndex(s => s.id === id);
-        if (idx === -1) return;
+        if (idx === -1) return false;
         this.shaders.splice(idx, 1);
         if (this.activeId === id) {
             this.activeId = this.shaders[0].id;
             this.onSwitch(this.activeId);
         }
         this.saveToStorage();
-        this.onShadersChange();
+        return true;
     }
 
     updateShader(id, updates) {
@@ -251,6 +265,9 @@ export class ShaderEditor {
         if (updates.name !== undefined) shader.name = updates.name;
         if (updates.source !== undefined) shader.source = updates.source;
         this.saveToStorage();
+    }
+
+    sync() {
         this.onShadersChange();
     }
 
@@ -312,6 +329,13 @@ export class ShaderEditor {
             if (Array.isArray(data.shaders) && data.shaders.length > 0) {
                 this.shaders = data.shaders;
                 this.activeId = data.activeId || this.shaders[0].id;
+                for (const s of this.shaders) {
+                    const m = s.id?.match(/^custom_(\d+)$/);
+                    if (m) {
+                        const n = parseInt(m[1], 10);
+                        if (n > idCounter) idCounter = n;
+                    }
+                }
             }
         } catch { }
     }
@@ -326,6 +350,10 @@ export class ShaderEditor {
     closeEditor() {
         this.editorOpen = false;
         this.editingId = null;
+        if (this._editorDebounceTimer) {
+            clearTimeout(this._editorDebounceTimer);
+            this._editorDebounceTimer = null;
+        }
         if (this.previewEngine) {
             this.previewEngine.destroy();
             this.previewEngine = null;
@@ -351,6 +379,16 @@ export class ShaderEditor {
                 <div class="shader-editor-right">
                     <canvas class="shader-preview-canvas"></canvas>
                     <div class="shader-preview-error"></div>
+                    <div class="shader-editor-chat">
+                        <div class="shader-chat-header">
+                            <span>AI Shader Assistant</span>
+                        </div>
+                        <div class="shader-chat-messages"></div>
+                        <div class="shader-chat-input-row">
+                            <textarea class="shader-chat-input" rows="1" placeholder="Ask about this shader..."></textarea>
+                            <button class="shader-chat-send" type="button">Ask</button>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
@@ -392,10 +430,9 @@ export class ShaderEditor {
             }
         };
 
-        const debounceTimer = { id: null };
         const schedulePreview = () => {
-            if (debounceTimer.id) clearTimeout(debounceTimer.id);
-            debounceTimer.id = setTimeout(compileAndPreview, 300);
+            if (this._editorDebounceTimer) clearTimeout(this._editorDebounceTimer);
+            this._editorDebounceTimer = setTimeout(compileAndPreview, 300);
         };
 
         textarea.addEventListener("input", schedulePreview);
@@ -412,12 +449,14 @@ export class ShaderEditor {
 
         applyBtn.addEventListener("click", () => {
             apply();
+            this.sync();
             schedulePreview();
         });
 
         closeBtn.addEventListener("click", () => {
             apply();
             this.closeEditor();
+            this.sync();
             document.dispatchEvent(new CustomEvent("shader-editor-close"));
         });
 
@@ -427,11 +466,76 @@ export class ShaderEditor {
             const newName = "Copy of " + currentName;
             const newId = this.addShader(newName, fullSource);
             this.closeEditor();
+            this.sync();
             document.dispatchEvent(new CustomEvent("shader-editor-close"));
             document.dispatchEvent(new CustomEvent("shader-editor-open", { detail: { shaderId: newId } }));
         });
 
+        this._initShaderChat(mountEl, textarea);
         compileAndPreview();
+    }
+
+    _initShaderChat(mountEl, sourceTextarea) {
+        const messages = mountEl.querySelector(".shader-chat-messages");
+        const input = mountEl.querySelector(".shader-chat-input");
+        const sendBtn = mountEl.querySelector(".shader-chat-send");
+        if (!messages || !input || !sendBtn) return;
+
+        const addMessage = (text, isUser = false) => {
+            const msg = document.createElement("div");
+            msg.className = `shader-chat-msg ${isUser ? "user" : "assistant"}`;
+            const pre = document.createElement("pre");
+            pre.textContent = text;
+            msg.appendChild(pre);
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        };
+
+        const sendMessage = () => {
+            const text = input.value.trim();
+            if (!text) return;
+            addMessage(text, true);
+            input.value = "";
+            input.style.height = "auto";
+
+            const shaderSource = sourceTextarea.value;
+            if (this.aiEngine && typeof this.aiEngine.processShader === "function") {
+                const result = this.aiEngine.processShader(text, shaderSource);
+                addMessage(result.response || "No response.");
+                if (result.modifiedSource) {
+                    const applyBtn = document.createElement("button");
+                    applyBtn.className = "shader-chat-apply";
+                    applyBtn.textContent = "Apply Changes";
+                    applyBtn.type = "button";
+                    applyBtn.addEventListener("click", () => {
+                        sourceTextarea.value = result.modifiedSource;
+                        sourceTextarea.dispatchEvent(new Event("input"));
+                        applyBtn.textContent = "Applied";
+                        applyBtn.disabled = true;
+                    });
+                    const lastMsg = messages.lastChild;
+                    if (lastMsg) lastMsg.appendChild(applyBtn);
+                }
+            } else {
+                addMessage("Shader AI assistant not available.");
+            }
+        };
+
+        sendBtn.addEventListener("click", sendMessage);
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 80) + "px";
+        });
+        input.addEventListener("input", () => {
+            input.style.height = "auto";
+            input.style.height = Math.min(input.scrollHeight, 80) + "px";
+        });
+
+        addMessage("Ask me about this shader. Try: explain, add glow, add blur, edge detect, color shift, or help.");
     }
 
     renderGallery(mountEl) {
@@ -461,11 +565,14 @@ export class ShaderEditor {
         };
         renderList();
 
+        const refreshAddBtn = () => mountEl.querySelector(".shader-add-btn");
+
         list.addEventListener("click", (e) => {
             const item = e.target.closest(".shader-item");
             if (item && !e.target.closest("button")) {
                 this.setActive(item.dataset.shaderId);
                 renderList();
+                this.sync();
             }
             if (e.target.closest(".shader-item-edit")) {
                 const id = e.target.closest(".shader-item-edit").dataset.shaderEdit;
@@ -473,8 +580,10 @@ export class ShaderEditor {
             }
             if (e.target.closest(".shader-item-delete")) {
                 const id = e.target.closest(".shader-item-delete").dataset.shaderDelete;
-                this.removeShader(id);
-                renderList();
+                if (this.removeShader(id)) {
+                    renderList();
+                    this.sync();
+                }
             }
         });
 
@@ -505,8 +614,8 @@ export class ShaderEditor {
             closeDropdown();
             if (action === "new") {
                 const id = this.addShader("New Shader", this._fallbackSource);
-                document.dispatchEvent(new CustomEvent("shader-editor-open", { detail: { shaderId: id } }));
                 renderList();
+                this.sync();
             } else if (action === "import") {
                 fileInput.value = "";
                 fileInput.click();
@@ -519,26 +628,32 @@ export class ShaderEditor {
             try {
                 const source = await file.text();
                 const name = file.name.replace(/\.(isf|fs|glsl|txt)$/i, "");
-                const id = this.addShader(name || file.name, source);
-                document.dispatchEvent(new CustomEvent("shader-editor-open", { detail: { shaderId: id } }));
-                renderList();
                 addBtn.textContent = "✓";
+                const id = this.addShader(name || file.name, source);
+                renderList();
+                this.sync();
                 const filename = name + ".isf";
                 this._saveToShadersDir(filename, source).then(copied => {
-                    if (copied) {
-                        addBtn.textContent = "📁";
-                        setTimeout(() => { addBtn.textContent = "+"; }, 2000);
-                    } else {
-                        setTimeout(() => { addBtn.textContent = "+"; }, 1500);
+                    const btn = refreshAddBtn();
+                    if (btn) {
+                        btn.textContent = copied ? "📁" : "+";
+                        setTimeout(() => { if (btn) btn.textContent = "+"; }, copied ? 2000 : 1500);
                     }
                 });
             } catch (err) {
                 console.error("Import failed:", err);
-                addBtn.textContent = "✗";
-                setTimeout(() => { addBtn.textContent = "+"; }, 2000);
+                const btn = refreshAddBtn();
+                if (btn) {
+                    btn.textContent = "✗";
+                    setTimeout(() => { if (btn) btn.textContent = "+"; }, 2000);
+                }
             }
         });
 
+        if (this._galleryDropdownHandler) {
+            document.removeEventListener("click", this._galleryDropdownHandler, false);
+        }
+        this._galleryDropdownHandler = closeDropdown;
         document.addEventListener("click", closeDropdown, false);
     }
 }

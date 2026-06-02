@@ -280,6 +280,7 @@
                         <h2 id="module-title">Drum Kit</h2>
                     </div>
                     <div class="module-header-actions">
+                        <button class="btn-bar" type="button" id="tieToggleBtn" data-tie-toggle>Tie</button>
                         <div class="rate-row" id="track-rate-btns" aria-label="Track rate">
                             <button class="btn-role" type="button" data-track-rate="0.5">Rate 1/2</button>
                             <button class="btn-role active" type="button" data-track-rate="1">Rate 1</button>
@@ -413,6 +414,9 @@
                         <button class="btn-tool" id="clearBtn" type="button">Clear</button>
                         <button class="btn-tool" id="copyBtn" type="button">Copy</button>
                         <button class="btn-tool" id="pasteBtn" type="button">Paste</button>
+                        <span class="tool-divider"></span>
+                        <button class="btn-tool" id="undoBtn" type="button" disabled title="Undo (Ctrl+Z)">↩</button>
+                        <button class="btn-tool" id="redoBtn" type="button" disabled title="Redo (Ctrl+Shift+Z)">↪</button>
                     </div>
                     <div class="random-role-row" id="random-role-btns" aria-label="Random role">
                         <button class="btn-role active" type="button" data-random-role="generate">Generate</button>
@@ -444,37 +448,35 @@
 
         <section id="center-panel" aria-label="Visual preview and pattern launch">
             <section id="canvas-container" aria-label="Reactive visual output">
-                <canvas id="visual-canvas"></canvas>
-                <div id="syntetika-logo" class="syntetika-logo" aria-label="Syntetika logo">
-                    <!-- Ganti dengan <img src="sintetika-logo.png" class="logo-img"> jika punya file gambar -->
-                    <svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg" class="logo-svg">
-                        <defs>
-                            <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#8ebf24"/>
-                                <stop offset="50%" stop-color="#4a9eff"/>
-                                <stop offset="100%" stop-color="#8ebf24"/>
-                            </linearGradient>
-                        </defs>
-                        <!-- Icon waveform line-art -->
-                        <g stroke="url(#logo-grad)" stroke-width="1.2" fill="none" opacity="0.6">
-                            <path d="M30,70 Q40,40 50,70 Q60,100 70,70 Q80,40 90,70 Q100,100 110,70" />
-                            <path d="M110,70 Q120,50 130,70 Q140,90 150,70 Q160,50 170,70" opacity="0.4"/>
-                            <circle cx="190" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
-                            <circle cx="210" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
-                            <circle cx="230" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
-                        </g>
-                        <!-- Garis horizontal -->
-                        <line x1="30" y1="82" x2="370" y2="82" stroke="url(#logo-grad)" stroke-width="0.5" opacity="0.25"/>
-                        <!-- Teks utama -->
-                        <text x="200" y="72" text-anchor="middle" fill="none" stroke="url(#logo-grad)" stroke-width="1.5" font-family="monospace" font-size="40" font-weight="900" letter-spacing="10">SYNTETIKA</text>
-                        <!-- Subteks -->
-                        <text x="200" y="100" text-anchor="middle" fill="#4a9eff" opacity="0.25" font-family="monospace" font-size="9" letter-spacing="8">ENGINE</text>
-                    </svg>
+                <div class="canvas-aspect-wrap" id="canvas-aspect-wrap">
+                    <canvas id="visual-canvas"></canvas>
+                    <div id="syntetika-logo" class="syntetika-logo" aria-label="Syntetika logo">
+                        <svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg" class="logo-svg">
+                            <defs>
+                                <linearGradient id="logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                    <stop offset="0%" stop-color="#8ebf24"/>
+                                    <stop offset="50%" stop-color="#4a9eff"/>
+                                    <stop offset="100%" stop-color="#8ebf24"/>
+                                </linearGradient>
+                            </defs>
+                            <g stroke="url(#logo-grad)" stroke-width="1.2" fill="none" opacity="0.6">
+                                <path d="M30,70 Q40,40 50,70 Q60,100 70,70 Q80,40 90,70 Q100,100 110,70" />
+                                <path d="M110,70 Q120,50 130,70 Q140,90 150,70 Q160,50 170,70" opacity="0.4"/>
+                                <circle cx="190" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                                <circle cx="210" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                                <circle cx="230" cy="70" r="3" fill="url(#logo-grad)" stroke="none" opacity="0.3"/>
+                            </g>
+                            <line x1="30" y1="82" x2="370" y2="82" stroke="url(#logo-grad)" stroke-width="0.5" opacity="0.25"/>
+                            <text x="200" y="72" text-anchor="middle" fill="none" stroke="url(#logo-grad)" stroke-width="1.5" font-family="monospace" font-size="40" font-weight="900" letter-spacing="10">SYNTETIKA</text>
+                            <text x="200" y="100" text-anchor="middle" fill="#4a9eff" opacity="0.25" font-family="monospace" font-size="9" letter-spacing="8">ENGINE</text>
+                        </svg>
+                    </div>
                 </div>
                 <div id="shader-controls" class="shader-controls"></div>
                 <div class="file-control" id="file-control">
                     <button class="monitor-badge file-toggle" id="file-menu-toggle" type="button" aria-expanded="false" aria-controls="file-menu">File</button>
                     <div class="file-menu" id="file-menu" aria-hidden="true">
+                        <button type="button" data-file-action="new">New Project</button>
                         <button type="button" data-file-action="save">Save</button>
                         <button type="button" data-file-action="save-as">Save As</button>
                         <button type="button" data-file-action="open">Open</button>
@@ -483,10 +485,13 @@
                     </div>
                     <input id="project-open-input" type="file" accept="application/json,.json" hidden>
                 </div>
+                <span class="project-name" id="project-name">Untitled</span>
                 <div class="visual-badge-row">
                     <button class="monitor-badge visual-toggle" id="visual-toggle" type="button" data-visual-toggle>Visual: On</button>
                     <span class="fps-counter" id="fps-counter">-- FPS</span>
                     <button class="monitor-badge popup-visual-btn" id="popup-visual-btn" type="button">Pop Up Visual</button>
+                    <button class="monitor-badge" id="media-load-btn" type="button">Load Media</button>
+                    <input id="media-file-input" type="file" accept="image/*" hidden>
                 </div>
                 <div class="aspect-control">
                     <button class="monitor-badge aspect-toggle" id="aspect-toggle" type="button" aria-expanded="false" aria-controls="aspect-menu">Aspect: Fill</button>
@@ -505,7 +510,7 @@
                         <button type="button" id="aspect-custom-apply">Apply Custom</button>
                     </div>
                 </div>
-                </section>
+            </section>
             <section class="pattern-launch-card" aria-label="Pattern Matrix">
                 <div id="pattern-matrix-host"></div>
             </section>

@@ -9,7 +9,7 @@ import {
     setLoopLength as setLoopLengthInStore,
     setTrackRate as setTrackRateInStore,
 } from "./pattern-store.js";
-import { SCALE_DEFINITIONS, DRUM_RANDOM_GENRES, PITCH_GENERATOR_STYLES, PITCH_GENERATOR_ROLES, PITCH_GENERATOR_MODES, MIDI_NOTE_NAMES } from "./constants.js";
+import { SCALE_DEFINITIONS, DRUM_RANDOM_GENRES, PITCH_GENERATOR_STYLES, PITCH_GENERATOR_ROLES, PITCH_GENERATOR_MODES, MIDI_NOTE_NAMES, DRUM_VOICE_INDEX, DRUM_VOICE_ORDER } from "./constants.js";
 import { clamp, noteNameToMidi, midiNoteName, isNoteName } from "./utils.js";
 
 export const ACTIONS = {
@@ -34,6 +34,9 @@ export const ACTIONS = {
     SHIFT_PITCH: "shift-pitch",
     SET_DRUM_VOICE: "set-drum-voice",
     SET_SELECTED_NOTE: "set-selected-note",
+    SET_DRUM_PATTERN: "set-drum-pattern",
+    SET_NOTE_PATTERN: "set-note-pattern",
+    SET_STYLE: "set-style",
     COMPOSE: "compose",
 };
 
@@ -96,6 +99,7 @@ export class AIBridge {
             visual: {
                 activeShaderId: s.activeShaderId,
             },
+            userStyle: s.userStyle ? { ...s.userStyle } : null,
         };
     }
 
@@ -171,11 +175,13 @@ export class AIBridge {
 
     // ── Undo / Redo ───────────────────────────────────
 
-    _saveUndo() {
+    saveUndo() {
         this.undoStack.push({ state: JSON.parse(JSON.stringify(this.state)) });
         if (this.undoStack.length > this.maxUndo) this.undoStack.shift();
         this.redoStack = [];
     }
+
+    _saveUndo() { this.saveUndo(); }
 
     canUndo() { return this.undoStack.length > 0; }
     canRedo() { return this.redoStack.length > 0; }
@@ -269,6 +275,9 @@ export class AIBridge {
             [ACTIONS.SHIFT_PITCH]: this._handleShiftPitch,
             [ACTIONS.SET_DRUM_VOICE]: this._handleSetDrumVoice,
             [ACTIONS.SET_SELECTED_NOTE]: this._handleSetSelectedNote,
+            [ACTIONS.SET_DRUM_PATTERN]: this._handleSetDrumPattern,
+            [ACTIONS.SET_NOTE_PATTERN]: this._handleSetNotePattern,
+            [ACTIONS.SET_STYLE]: this._handleSetStyle,
         };
         return handlers[type];
     }
@@ -387,7 +396,7 @@ export class AIBridge {
             } else {
                 const defaultNote = kind === "bass" ? "C1" : "C2";
                 for (let s = 0; s < pattern.length; s++) {
-                    pattern[s] = { active: false, note: defaultNote };
+                    pattern[s] = { active: false, note: defaultNote, tie: false };
                 }
             }
             setActivePatternInStore(this.state, kind, pattern);
@@ -469,6 +478,79 @@ export class AIBridge {
         }
     }
 
+    _handleSetDrumPattern(action) {
+        const pattern = getActivePattern(this.state, "drum");
+        if (!pattern) return;
+        const tracks = action.tracks;
+        if (!Array.isArray(tracks) || !tracks.length) return;
+
+        // Clear all drum steps
+        for (let t = 0; t < pattern.length; t++) {
+            for (let s = 0; s < pattern[t].length; s++) {
+                pattern[t][s] = false;
+            }
+        }
+
+        // Set specified steps per voice
+        for (const track of tracks) {
+            const voice = track.voice;
+            const steps = track.steps;
+            if (!Array.isArray(steps)) continue;
+            const trackIndex = DRUM_VOICE_INDEX[voice];
+            if (trackIndex === undefined || trackIndex >= pattern.length) continue;
+            for (const step of steps) {
+                const s = Number(step);
+                if (Number.isInteger(s) && s >= 0 && s < pattern[trackIndex].length) {
+                    pattern[trackIndex][s] = true;
+                }
+            }
+        }
+
+        setActivePatternInStore(this.state, "drum", pattern);
+    }
+
+    _handleSetNotePattern(action) {
+        const kind = action.mode || this.state.mode;
+        if (kind === "drum") return;
+        const pattern = getActivePattern(this.state, kind);
+        if (!pattern) return;
+        const notes = action.notes;
+        if (!Array.isArray(notes) || !notes.length) return;
+
+        // Clear all steps
+        const defaultNote = kind === "bass" ? "C1" : "C2";
+        for (let s = 0; s < pattern.length; s++) {
+            pattern[s] = { active: false, note: defaultNote, tie: false };
+        }
+
+        // Set specified steps
+        for (const item of notes) {
+            const step = Number(item.step);
+            if (!Number.isInteger(step) || step < 0 || step >= pattern.length) continue;
+            if (!isNoteName(item.note)) continue;
+            pattern[step] = {
+                active: item.active !== false,
+                note: item.note,
+                tie: item.tie === true,
+            };
+        }
+
+        setActivePatternInStore(this.state, kind, pattern);
+    }
+
+    _handleSetStyle(action) {
+        const style = action.style;
+        if (!style || typeof style !== "object") return;
+        if (!this.state.userStyle) this.state.userStyle = {};
+        for (const key of ["preferredGenre", "preferredBpm", "preferredScale", "preferredRoot",
+            "preferredDrumGenre", "preferredBassStyle", "preferredMelodyStyle", "preferredOtherStyle",
+            "preferredBassGenStyle", "preferredMelodyGenStyle", "preferredOtherGenRole"]) {
+            if (style[key] !== undefined) {
+                this.state.userStyle[key] = style[key];
+            }
+        }
+    }
+
     _handleSetSelectedNote(action) {
         const kind = action.mode || this.state.mode;
         if (kind === "drum") return;
@@ -478,9 +560,11 @@ export class AIBridge {
         if (!Number.isInteger(step) || step < 0 || step >= pattern.length) return;
         const note = action.note;
         if (!isNoteName(note)) return;
+        const existing = pattern[step];
         pattern[step] = {
-            active: action.active !== undefined ? Boolean(action.active) : pattern[step]?.active !== false,
+            active: action.active !== undefined ? Boolean(action.active) : existing?.active !== false,
             note,
+            tie: existing?.tie === true,
         };
         setActivePatternInStore(this.state, kind, pattern);
     }

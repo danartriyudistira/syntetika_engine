@@ -4,6 +4,8 @@ export class MidiManager {
         this.ready = false;
         this.onMessage = onMessage;
         this.onStateChange = onStateChange;
+        this._clockTimer = null;
+        this._clockOutputID = "";
     }
 
     async init() {
@@ -100,6 +102,20 @@ export class MidiManager {
             .some(Boolean);
     }
 
+    sendNoteOn(outputID, channel, note, velocity = 0x70) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([statusByte(0x90, channel), clampMidiNote(note), clampVelocity(velocity)]);
+        return true;
+    }
+
+    sendNoteOff(outputID, channel, note) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([statusByte(0x80, channel), clampMidiNote(note), 0x00]);
+        return true;
+    }
+
     panic(outputID = "") {
         const outputs = outputID ? [this.outputById(outputID)].filter(Boolean) : this.outputs();
         outputs.forEach((output) => {
@@ -111,6 +127,63 @@ export class MidiManager {
                 }
             }
         });
+    }
+
+    sendRaw(outputID, data) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send(data);
+        return true;
+    }
+
+    sendMidiClock(outputID) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([0xF8]);
+        return true;
+    }
+
+    sendMidiStart(outputID) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([0xFA]);
+        return true;
+    }
+
+    sendMidiStop(outputID) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([0xFC]);
+        return true;
+    }
+
+    sendMidiContinue(outputID) {
+        const output = this.outputById(outputID);
+        if (!output) return false;
+        output.send([0xFB]);
+        return true;
+    }
+
+    startClockStream(outputID, bpm) {
+        this.stopClockStream();
+        if (!outputID || !this.outputById(outputID)) return;
+        this._clockOutputID = outputID;
+        const intervalMs = 60000 / bpm / 24;
+        this._clockTimer = setInterval(() => {
+            this.sendMidiClock(this._clockOutputID);
+        }, Math.max(1, intervalMs));
+    }
+
+    stopClockStream() {
+        if (this._clockTimer) {
+            clearInterval(this._clockTimer);
+            this._clockTimer = null;
+        }
+        this._clockOutputID = "";
+    }
+
+    isClockRunning() {
+        return this._clockTimer !== null;
     }
 }
 

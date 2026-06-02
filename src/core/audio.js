@@ -26,6 +26,7 @@ export class AudioEngine {
         this.driveCurveCache = new Map();
         this.noiseVariantCount = 6;
         this._fftData = new Uint8Array(this.analyser.frequencyBinCount);
+        this._activeVoices = { bass: null, melody: null, other: null };
     }
 
     getFrequencyData() {
@@ -59,33 +60,78 @@ export class AudioEngine {
         return this.channels?.[kind] || this.master;
     }
 
-    playDrum(index, style = "default") {
+    noteOn(kind, noteName, when) {
+        if (!this.ctx) return;
+        this.releaseNote(kind, when);
+        const now = when ?? this.ctx.currentTime;
+        const freq = noteToFrequency(noteName);
+        const ch = this.channel(kind);
+        const osc = this.ctx.createOscillator();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(freq, now);
+        const filter = this.ctx.createBiquadFilter();
+        filter.type = "lowpass";
+        filter.frequency.value = Math.max(200, freq * 6);
+        filter.Q.value = 2;
+        const gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(0.0001, now);
+        gain.gain.exponentialRampToValueAtTime(0.16, now + 0.015);
+        osc.connect(filter);
+        filter.connect(gain);
+        gain.connect(ch);
+        osc.start(now);
+        this._activeVoices[kind] = { osc, gain, filter };
+    }
+
+    retieNote(kind, noteName, when) {
+        if (!this.ctx) return;
+        const voice = this._activeVoices[kind];
+        if (!voice) return this.noteOn(kind, noteName, when);
+        const now = when ?? this.ctx.currentTime;
+        const freq = noteToFrequency(noteName);
+        voice.osc.frequency.setValueAtTime(freq, now);
+        voice.filter.frequency.setValueAtTime(Math.max(200, freq * 6), now);
+    }
+
+    releaseNote(kind, when) {
+        if (!this.ctx) return;
+        const voice = this._activeVoices[kind];
+        if (!voice) return;
+        const now = when ?? this.ctx.currentTime;
+        voice.gain.gain.cancelScheduledValues(now);
+        voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
+        voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+        try { voice.osc.stop(now + 0.06); } catch {}
+        this._activeVoices[kind] = null;
+    }
+
+    playDrum(index, style = "default", when) {
         if (!this.ctx) return;
         const voice = drumVoiceFromInput(index);
         this.activeOutput = this.channel("drum");
         if (["kick", "snare", "hat-close", "hat-open"].includes(voice)) {
             const legacyIndex = drumLegacyIndex(voice);
-            if (style === "glitch") return this.playGlitchDrum(legacyIndex);
-            if (style === "noise") return this.playNoiseDrum(legacyIndex);
-            if (style === "abstract") return this.playAbstractDrum(legacyIndex);
+            if (style === "glitch") return this.playGlitchDrum(legacyIndex, when);
+            if (style === "noise") return this.playNoiseDrum(legacyIndex, when);
+            if (style === "abstract") return this.playAbstractDrum(legacyIndex, when);
         }
-        if (voice === "kick") this.kick();
-        if (voice === "snare") this.snare();
-        if (voice === "clap") this.clap(style);
-        if (voice === "tom-hi") this.tom(185, 122, 0.22, 0.3, style);
-        if (voice === "tom-lo") this.tom(118, 74, 0.28, 0.36, style);
-        if (voice === "hat-close") this.hat(0.045, 7000);
-        if (voice === "hat-open") this.hat(0.18, 5200);
+        if (voice === "kick") this.kick(when);
+        if (voice === "snare") this.snare(when);
+        if (voice === "clap") this.clap(style, when);
+        if (voice === "tom-hi") this.tom(185, 122, 0.22, 0.3, style, when);
+        if (voice === "tom-lo") this.tom(118, 74, 0.28, 0.36, style, when);
+        if (voice === "hat-close") this.hat(0.045, 7000, when);
+        if (voice === "hat-open") this.hat(0.18, 5200, when);
     }
 
-    playBass(noteName, style = "hard-bass") {
+    playBass(noteName, style = "hard-bass", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("bass");
         style = resolveSoundStyle("bass", style);
-        if (style === "sub") return this.playSubBass(noteName);
-        if (style === "acid") return this.playAcidBass(noteName);
-        if (style === "pluck") return this.playPluckBass(noteName);
-        const now = this.ctx.currentTime;
+        if (style === "sub") return this.playSubBass(noteName, when);
+        if (style === "acid") return this.playAcidBass(noteName, when);
+        if (style === "pluck") return this.playPluckBass(noteName, when);
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -125,9 +171,9 @@ export class AudioEngine {
         oscC.stop(now + 0.45);
     }
 
-    playSubBass(noteName) {
+    playSubBass(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const osc = this.ctx.createOscillator();
         const sub = this.ctx.createOscillator();
@@ -167,9 +213,9 @@ export class AudioEngine {
         fifth.stop(now + 0.62);
     }
 
-    playAcidBass(noteName) {
+    playAcidBass(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -203,9 +249,10 @@ export class AudioEngine {
         oscB.stop(now + 0.32);
     }
 
-    playPluckBass(noteName) {
+    playPluckBass(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
+
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -239,14 +286,14 @@ export class AudioEngine {
         oscB.stop(now + 0.22);
     }
 
-    playMelody(noteName, style = "vintage") {
+    playMelody(noteName, style = "vintage", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("melody");
         style = resolveSoundStyle("melody", style);
-        if (style === "bell") return this.playBellMelody(noteName);
-        if (style === "lead") return this.playLeadMelody(noteName);
-        if (style === "pad") return this.playPadMelody(noteName);
-        const now = this.ctx.currentTime;
+        if (style === "bell") return this.playBellMelody(noteName, when);
+        if (style === "lead") return this.playLeadMelody(noteName, when);
+        if (style === "pad") return this.playPadMelody(noteName, when);
+        const now = when ?? this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
 
@@ -262,9 +309,9 @@ export class AudioEngine {
         osc.stop(now + 0.46);
     }
 
-    playBellMelody(noteName) {
+    playBellMelody(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -287,9 +334,9 @@ export class AudioEngine {
         oscB.stop(now + 0.82);
     }
 
-    playLeadMelody(noteName) {
+    playLeadMelody(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const filter = this.ctx.createBiquadFilter();
         const gain = this.ctx.createGain();
@@ -310,9 +357,9 @@ export class AudioEngine {
         osc.stop(now + 0.54);
     }
 
-    playPadMelody(noteName) {
+    playPadMelody(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -339,19 +386,19 @@ export class AudioEngine {
         oscB.stop(now + 1.2);
     }
 
-    playOther(noteName, style = "bass") {
+    playOther(noteName, style = "bass", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("other");
         style = resolveSoundStyle("other", style);
-        if (style === "plucky") return this.playPluckyMono(noteName);
-        if (style === "stabby") return this.playStabbyMono(noteName);
-        if (style === "fm") return this.playFmMono(noteName);
-        return this.playMoogMono(noteName);
+        if (style === "plucky") return this.playPluckyMono(noteName, when);
+        if (style === "stabby") return this.playStabbyMono(noteName, when);
+        if (style === "fm") return this.playFmMono(noteName, when);
+        return this.playMoogMono(noteName, when);
     }
 
-    playMoogMono(noteName) {
+    playMoogMono(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -380,9 +427,9 @@ export class AudioEngine {
         oscB.stop(now + 0.45);
     }
 
-    playPluckyMono(noteName) {
+    playPluckyMono(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -410,9 +457,9 @@ export class AudioEngine {
         oscB.stop(now + 0.22);
     }
 
-    playStabbyMono(noteName) {
+    playStabbyMono(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const oscA = this.ctx.createOscillator();
         const oscB = this.ctx.createOscillator();
@@ -441,9 +488,9 @@ export class AudioEngine {
         oscB.stop(now + 0.18);
     }
 
-    playFmMono(noteName) {
+    playFmMono(noteName, when) {
         if (!this.ctx) return;
-        const now = this.ctx.currentTime;
+        const now = when ?? this.ctx.currentTime;
         const frequency = noteToFrequency(noteName);
         const carrier = this.ctx.createOscillator();
         const modulator = this.ctx.createOscillator();
@@ -475,8 +522,8 @@ export class AudioEngine {
         modulator.stop(now + 0.38);
     }
 
-    kick() {
-        const now = this.ctx.currentTime;
+    kick(when) {
+        const now = when ?? this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const gain = this.ctx.createGain();
 
@@ -492,8 +539,8 @@ export class AudioEngine {
         osc.stop(now + 0.24);
     }
 
-    snare() {
-        const now = this.ctx.currentTime;
+    snare(when) {
+        const now = when ?? this.ctx.currentTime;
         const noise = this.noiseBuffer(0.18);
         const source = this.ctx.createBufferSource();
         const filter = this.ctx.createBiquadFilter();
@@ -523,8 +570,8 @@ export class AudioEngine {
         body.stop(now + 0.1);
     }
 
-    clap(style = "default") {
-        const now = this.ctx.currentTime;
+    clap(style = "default", when) {
+        const now = when ?? this.ctx.currentTime;
         const bursts = style === "abstract" ? [0, 0.018, 0.042, 0.072] : [0, 0.014, 0.031, 0.052];
         bursts.forEach((offset, index) => {
             const source = this.ctx.createBufferSource();
@@ -548,8 +595,8 @@ export class AudioEngine {
         if (style === "abstract") this.resonantPing(980, 11, 0.12, 0.08, now + 0.026);
     }
 
-    tom(startFreq, endFreq, seconds, volume, style = "default") {
-        const now = this.ctx.currentTime;
+    tom(startFreq, endFreq, seconds, volume, style = "default", when) {
+        const now = when ?? this.ctx.currentTime;
         const osc = this.ctx.createOscillator();
         const body = this.ctx.createOscillator();
         const filter = this.ctx.createBiquadFilter();
@@ -581,8 +628,8 @@ export class AudioEngine {
         if (style === "abstract") this.resonantPing(startFreq * 2.2, 10, seconds * 0.7, 0.055, now + 0.018);
     }
 
-    hat(length, freq) {
-        const now = this.ctx.currentTime;
+    hat(length, freq, when) {
+        const now = when ?? this.ctx.currentTime;
         const source = this.ctx.createBufferSource();
         const filter = this.ctx.createBiquadFilter();
         const gain = this.ctx.createGain();
@@ -600,10 +647,10 @@ export class AudioEngine {
         source.stop(now + length);
     }
 
-    playGlitchDrum(index) {
-        const now = this.ctx.currentTime;
+    playGlitchDrum(index, when) {
+        const now = when ?? this.ctx.currentTime;
         if (index === 0) {
-            this.toneBurst("square", 92, 31, 0.13, 0.54);
+            this.toneBurst("square", 92, 31, 0.13, 0.54, now);
             this.toneBurst("sawtooth", 47, 54, 0.045, 0.18, now + 0.038);
             this.filteredNoise(0.018, "highpass", 4200, 0.22, now);
         }
@@ -621,8 +668,8 @@ export class AudioEngine {
         }
     }
 
-    playNoiseDrum(index) {
-        const now = this.ctx.currentTime;
+    playNoiseDrum(index, when) {
+        const now = when ?? this.ctx.currentTime;
         if (index === 0) {
             this.toneBurst("sine", 92, 39, 0.13, 0.34, now);
             this.filteredNoise(0.055, "lowpass", 260, 0.2, now);
@@ -647,8 +694,8 @@ export class AudioEngine {
         }
     }
 
-    playAbstractDrum(index) {
-        const now = this.ctx.currentTime;
+    playAbstractDrum(index, when) {
+        const now = when ?? this.ctx.currentTime;
         if (index === 0) {
             this.resonantPing(58, 1.9, 0.28, 0.28, now);
             this.resonantPing(176, 7.5, 0.11, 0.08, now + 0.018);

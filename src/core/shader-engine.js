@@ -35,7 +35,7 @@ function parseISFHeader(source) {
     try {
         const json = JSON.parse('{' + match[1] + '}');
         const inputs = Array.isArray(json.INPUTS) ? json.INPUTS : [];
-        const validTypes = ['float','bool','long','event','color','point2D'];
+        const validTypes = ['float','bool','long','event','color','point2D','image'];
         return {
             inputs: inputs.filter(i => validTypes.includes(i.TYPE)).map(i => {
                 const type = i.TYPE;
@@ -89,6 +89,7 @@ export class ShaderEngine {
         };
         this.notePitch = 0;
         this.lastTrack = 0;
+        this.isWebGL2 = false;
         this._contextLost = false;
         this._resizeObserver = null;
         this._frameCount = 0;
@@ -99,8 +100,11 @@ export class ShaderEngine {
         this._lastFrameTime = 0;
         this._minFrameInterval = 0;
         this._onFpsUpdate = null;
+        this._customTextures = {};
+        this._contextRestoredCallbacks = [];
         this._boundContextLost = (e) => this._handleContextLost(e);
         this._boundContextRestored = () => this._handleContextRestored();
+        this._lastSource = null;
     }
 
     set onFpsUpdate(cb) { this._onFpsUpdate = cb; }
@@ -184,17 +188,31 @@ export class ShaderEngine {
 
     _handleContextRestored() {
         this._contextLost = false;
-        const gl = this.canvas?.getContext("webgl", {
+        const opts = {
             antialias: false, alpha: false,
             premultipliedAlpha: false, preserveDrawingBuffer: false
-        });
+        };
+        let gl = this.canvas?.getContext("webgl2", opts);
+        this.isWebGL2 = !!gl;
+        if (!gl) gl = this.canvas?.getContext("webgl", opts);
         if (!gl) return;
         this.gl = gl;
         gl.disable(gl.DEPTH_TEST);
         gl.disable(gl.BLEND);
+
+        this._vbo = null;
+        this._customTextures = {};
         this._setupResizeObserver();
+
+        const shaderOk = this._lastSource ? this.compileShader(this._lastSource) : false;
+        this.startTime = performance.now();
+        this._lastFpsTime = performance.now();
+        this._frameCount = 0;
+        this.fps = 0;
+
         this.running = true;
         if (this._enabled) this.startLoop();
+        this._contextRestoredCallbacks.forEach(cb => cb());
     }
 
     _setupResizeObserver() {
@@ -215,12 +233,15 @@ export class ShaderEngine {
 
     init(canvas) {
         this.canvas = canvas;
-        const gl = canvas.getContext("webgl", {
+        const opts = {
             antialias: false,
             alpha: false,
             premultipliedAlpha: false,
             preserveDrawingBuffer: false
-        });
+        };
+        let gl = canvas.getContext("webgl2", opts);
+        this.isWebGL2 = !!gl;
+        if (!gl) gl = canvas.getContext("webgl", opts);
         if (!gl) return false;
         this.gl = gl;
         gl.disable(gl.DEPTH_TEST);
@@ -245,6 +266,7 @@ export class ShaderEngine {
         const gl = this.gl;
         if (!gl) return false;
         this.compileError = null;
+        this._lastSource = source;
 
         const header = parseISFHeader(source);
         this.inputDefs = header.inputs;
@@ -253,9 +275,11 @@ export class ShaderEngine {
 
         let decls = ISF_DECL;
         for (const inp of header.inputs) {
-            const glslType = inp.type === 'color' ? 'vec4' : inp.type === 'point2D' ? 'vec2' : inp.type === 'long' ? 'int' : inp.type === 'bool' ? 'bool' : 'float';
+            const glslType = inp.type === 'color' ? 'vec4' : inp.type === 'point2D' ? 'vec2' : inp.type === 'long' ? 'int' : inp.type === 'bool' ? 'bool' : inp.type === 'image' ? 'sampler2D' : 'float';
             decls += `uniform ${glslType} ${inp.name};\n`;
-            this.params[inp.name] = inp.def;
+            if (inp.type !== 'image') {
+                this.params[inp.name] = inp.def;
+            }
         }
         const fullSource = decls + "\n" + glslBody;
 
@@ -385,6 +409,7 @@ export class ShaderEngine {
         if (U.u_trigger_track !== null) gl.uniform1f(U.u_trigger_track, this.lastTrack);
 
         for (const inp of this.inputDefs) {
+            if (inp.type === 'image') continue;
             const loc = U[inp.name];
             if (loc !== null) {
                 const val = this.params[inp.name] ?? inp.def;
@@ -396,6 +421,20 @@ export class ShaderEngine {
                     gl.uniform1i(loc, Math.round(val));
                 } else {
                     gl.uniform1f(loc, val);
+                }
+            }
+        }
+
+        let texUnit = 0;
+        for (const inp of this.inputDefs) {
+            if (inp.type === 'image') {
+                const tex = this._customTextures[inp.name];
+                const loc = U[inp.name];
+                if (tex && loc !== null) {
+                    gl.activeTexture(gl.TEXTURE0 + texUnit);
+                    gl.bindTexture(gl.TEXTURE_2D, tex);
+                    gl.uniform1i(loc, texUnit);
+                    texUnit++;
                 }
             }
         }
@@ -430,6 +469,38 @@ export class ShaderEngine {
         }
     }
 
+    setTexture(name, texture) {
+        this._customTextures[name] = texture;
+    }
+
+    removeTexture(name) {
+        delete this._customTextures[name];
+    }
+
+    createTextureFromImage(image) {
+        const gl = this.gl;
+        if (!gl) return null;
+        const texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        return texture;
+    }
+
+    deleteTexture(texture) {
+        if (this.gl && texture) this.gl.deleteTexture(texture);
+    }
+
+    onContextRestored(callback) {
+        if (typeof callback === 'function') {
+            this._contextRestoredCallbacks.push(callback);
+        }
+    }
+
     destroy() {
         this.stopLoop();
         this.running = false;
@@ -444,6 +515,10 @@ export class ShaderEngine {
             }
             if (this.program) this.gl.deleteProgram(this.program);
             this.program = null;
+            for (const key of Object.keys(this._customTextures)) {
+                this.gl.deleteTexture(this._customTextures[key]);
+            }
+            this._customTextures = {};
         }
         if (this.canvas) {
             this.canvas.removeEventListener("webglcontextlost", this._boundContextLost);

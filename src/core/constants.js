@@ -281,6 +281,21 @@ export const GENRE_PROFILES = {
         monoGenerator: { mode: "structured", role: "mono", style: "riff" },
         sceneStructure: ["intro", "build", "drop", "breakdown", "build", "drop", "outro"],
     },
+    "nusantara-futurism": {
+        id: "nusantara-futurism",
+        label: "Nusantara Futurism",
+        tempoRange: { min: 110, max: 140 },
+        defaultTempo: 124,
+        scale: "gamelan-selendro",
+        drumGenre: "techno",
+        bassStyle: "hard-bass",
+        melodyStyle: "glass",
+        otherStyle: "fx",
+        pitchGenerator: { mode: "structured", role: "bass", style: "syncopated" },
+        melodyGenerator: { mode: "structured", role: "melody", style: "motif" },
+        monoGenerator: { mode: "structured", role: "mono", style: "drone" },
+        sceneStructure: ["intro", "build", "drop", "breakdown", "drop", "outro"],
+    },
 };
 
 export const INSTRUMENTS = [

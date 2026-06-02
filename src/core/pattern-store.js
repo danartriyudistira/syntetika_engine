@@ -28,9 +28,9 @@ export const DRUM_TRACK_COUNT = DRUM_VOICE_ORDER.length;
 export function createEmptyMemory() {
     return {
         drum: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: DRUM_TRACK_COUNT }, () => Array(DRUM_STEP_COUNT).fill(false)))),
-        bass: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C1" })))),
-        melody: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" })))),
-        other: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" }))))
+        bass: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C1", tie: false })))),
+        melody: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2", tie: false })))),
+        other: Array.from({ length: BANK_COUNT }, () => Array.from({ length: PRESET_COUNT }, () => Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2", tie: false }))))
     };
 }
 
@@ -58,21 +58,24 @@ export function normalizeMemory(memory) {
                     : memory.bass?.[bank]?.[slot]?.[step];
                 clean.bass[bank][slot][step] = {
                     active: Boolean(saved?.active),
-                    note: isNoteName(saved?.note) ? saved.note : "C1"
+                    note: isNoteName(saved?.note) ? saved.note : "C1",
+                    tie: saved?.tie === true
                 };
                 const savedMelody = isLegacySlotMemory
                     ? memory.melody?.[slot]?.[step]
                     : memory.melody?.[bank]?.[slot]?.[step];
                 clean.melody[bank][slot][step] = {
                     active: Boolean(savedMelody?.active),
-                    note: isNoteName(savedMelody?.note) ? savedMelody.note : "C2"
+                    note: isNoteName(savedMelody?.note) ? savedMelody.note : "C2",
+                    tie: savedMelody?.tie === true
                 };
                 const savedOther = isLegacySlotMemory
                     ? memory.other?.[slot]?.[step]
                     : memory.other?.[bank]?.[slot]?.[step];
                 clean.other[bank][slot][step] = {
                     active: Boolean(savedOther?.active),
-                    note: isNoteName(savedOther?.note) ? savedOther.note : "C2"
+                    note: isNoteName(savedOther?.note) ? savedOther.note : "C2",
+                    tie: savedOther?.tie === true
                 };
             }
         }

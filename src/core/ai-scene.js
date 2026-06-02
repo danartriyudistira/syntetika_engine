@@ -52,6 +52,64 @@ export class SceneManager {
         return this._arrangementSummary(profile, bank);
     }
 
+    composeCustom(genreId, customScenes) {
+        const profile = GENRE_PROFILES[genreId];
+        if (!profile) return { ok: false, error: `Unknown genre: ${genreId}` };
+        if (!customScenes || !customScenes.length) return { ok: false, error: "No scenes provided" };
+
+        const bank = this._pickBank();
+        this.bridge._saveUndo();
+        this._lastArrangement = { genre: genreId, bank, scenes: [] };
+
+        this._applyGenreGlobals(profile);
+
+        const validDensities = ["none", "minimal", "low", "medium", "high"];
+
+        for (let i = 0; i < customScenes.length && i < PRESET_COUNT; i++) {
+            const custom = customScenes[i];
+            const bars = custom.bars || 4;
+            const clampDensity = (v) => validDensities.includes(v) ? v : "medium";
+
+            const layers = {
+                drum: { density: clampDensity(custom.layers?.drum || "low"), complexity: "custom" },
+                bass: { density: clampDensity(custom.layers?.bass || "none"), complexity: "custom" },
+                melody: { density: clampDensity(custom.layers?.melody || "none"), complexity: "custom" },
+                other: { density: clampDensity(custom.layers?.other || "none"), complexity: "custom" },
+            };
+
+            const virtualDef = {
+                id: `custom-${i}`,
+                label: custom.name || `Scene ${i + 1}`,
+                defaultBars: bars,
+                description: custom.name || "",
+                layers,
+                energy: custom.energy ?? 0.5,
+            };
+
+            const slot = i;
+            this._composeScene(profile, virtualDef, bank, slot, i, customScenes.length);
+            this._lastArrangement.scenes.push({
+                scene: virtualDef.label,
+                bank,
+                slot,
+                layers: { ...layers },
+            });
+        }
+
+        this._activateSlot(bank, 0);
+        this.bridge?.commit();
+
+        const sceneLabels = this._lastArrangement.scenes.map((s, i) => `${s.scene} (P${i + 1})`);
+        return {
+            ok: true,
+            genre: profile.label,
+            bank,
+            sceneCount: customScenes.length,
+            scenes: sceneLabels,
+            summary: `Custom "${profile.label}" — ${customScenes.length} scenes at Bank ${bank + 1}\n` + sceneLabels.map((s, i) => `  P${i + 1}: ${s}`).join("\n"),
+        };
+    }
+
     activateScene(index) {
         if (!this._lastArrangement) return false;
         const scenes = this._lastArrangement.scenes;
@@ -133,10 +191,10 @@ export class SceneManager {
                 for (let s = 0; s < mem[t].length; s++) mem[t][s] = false;
             }
         } else {
-            const defaultNote = kind === "bass" ? "C1" : "C2";
-            for (let s = 0; s < mem.length; s++) {
-                mem[s] = { active: false, note: defaultNote };
-            }
+        const defaultNote = kind === "bass" ? "C1" : "C2";
+        for (let s = 0; s < mem.length; s++) {
+            mem[s] = { active: false, note: defaultNote, tie: false };
+        }
         }
     }
 
@@ -167,7 +225,7 @@ export class SceneManager {
          } else {
              const defaultNote = kind === "bass" ? "C1" : "C2";
              for (let s = 0; s < pattern.length; s++) {
-                 pattern[s] = { active: false, note: defaultNote };
+                 pattern[s] = { active: false, note: defaultNote, tie: false };
              }
          }
 
@@ -290,105 +348,84 @@ export class SceneManager {
      _generateBassPattern(pattern, scaleDef, rootNote, loopLength, sceneIndex) {
          // Reset pattern
          for (let step = 0; step < pattern.length; step++) {
-             pattern[step] = { active: false, note: rootNote, velocity: 0x60 };
-         }
+            pattern[step] = { active: false, note: rootNote, velocity: 0x60, tie: false };
+        }
 
-         if (!scaleDef) return;
-         const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
-         const rootMidi = noteNameToMidi(rootNote);
-         const fifthMidi = (rootMidi + 7) % 128;
-         const fifthNote = midiNoteName(fifthMidi);
+        if (!scaleDef) return;
+        const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
+        const rootMidi = noteNameToMidi(rootNote);
+        const fifthMidi = (rootMidi + 7) % 128;
+        const fifthNote = midiNoteName(fifthMidi);
 
-         // Create a simple bass pattern that alternates root and fifth every quarter note
-         // Vary the pattern slightly with sceneIndex: sometimes play root on beat 1 and 3, fifth on 2 and 4
-         const useRootOnBeat = sceneIndex % 2 === 0; // alternate between two feels
-         for (let step = 0; step < loopLength; step++) {
-             const beatPos = step % 4; // 0,1,2,3
-             let isRoot = false;
-             if (useRootOnBeat) {
-                 isRoot = beatPos === 0 || beatPos === 2; // root on 1 and 3
-             } else {
-                 isRoot = beatPos === 0 || beatPos === 1; // root on 1 and 2? Actually let's do root on downbeat and fifth on upbeat? We'll keep simple.
-             }
-             // Actually let's do a simple pattern: root on beats 0 and 2 (if using 16th note steps? Wait our loopLength is in steps, each step is a 16th note? In our sequencer, each step is a 16th note? The pattern length for bass is NOTE_STEP_COUNT = 256 steps per bank? Actually the pattern for bass is an array of length NOTE_STEP_COUNT (256) representing 16th notes over 4 bars? But we are using loopLength which is the number of steps in the pattern (e.g., 64 for one bar of 16th notes? Actually for bass, the loopLength is set in presetLoopLengths, which for note modes is 64, 128, or 256 steps. We'll assume loopLength is the number of 16th notes in the pattern.
-             // We'll just keep the simple pattern: root on step 0, fifth on step 8, etc. but we need to map to our step index.
-             // Let's instead use a fixed pattern that works regardless of loopLength: play root on every quarter note (steps 0, 4, 8, 12, ...) and fifth on the off quarter notes (steps 2, 6, 10, 14, ...) if we want a walking bass? Actually we'll do a simple root-fifth alternation every quarter note.
-             const isQuarter = step % 4 === 0;
-             const isOffQuarter = step % 4 === 2;
-             if (isQuarter) {
-                 pattern[step] = { active: true, note: rootNote, velocity: 0x80 };
-             } else if (isOffQuarter) {
-                 pattern[step] = { active: true, note: fifthNote, velocity: 0x70 };
-             } else {
-                 // Optionally add ghost notes on the eights? We'll leave inactive.
-                 pattern[step] = { active: false, note: rootNote, velocity: 0x60 };
-             }
-         }
+        const useRootOnBeat = sceneIndex % 2 === 0;
+        for (let step = 0; step < loopLength; step++) {
+            const isQuarter = step % 4 === 0;
+            const isOffQuarter = step % 4 === 2;
+            if (isQuarter) {
+                pattern[step] = { active: true, note: rootNote, velocity: 0x80, tie: false };
+            } else if (isOffQuarter) {
+                pattern[step] = { active: true, note: fifthNote, velocity: 0x70, tie: false };
+            } else {
+                pattern[step] = { active: false, note: rootNote, velocity: 0x60, tie: false };
+            }
+        }
      }
 
      _generateMelodyPattern(pattern, scaleDef, rootNote, loopLength, sceneIndex) {
-         // Reset pattern
-         for (let step = 0; step < pattern.length; step++) {
-             pattern[step] = { active: false, note: rootNote, velocity: 0x60 };
-         }
+        // Reset pattern
+        for (let step = 0; step < pattern.length; step++) {
+            pattern[step] = { active: false, note: rootNote, velocity: 0x60, tie: false };
+        }
 
-         if (!scaleDef) return;
-         const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
-         const rootMidi = noteNameToMidi(rootNote);
-         const scaleNotes = scaleDef.intervals.map(interval => midiNoteName((rootMidi + interval) % 128));
+        if (!scaleDef) return;
+        const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
+        const rootMidi = noteNameToMidi(rootNote);
+        const scaleNotes = scaleDef.intervals.map(interval => midiNoteName((rootMidi + interval) % 128));
 
-         // Create a simple motif: play a repeating sequence of scale degrees
-         // Vary the motif based on sceneIndex
-         const motifs = [
-             [0, 2, 4, 2], // up and down
-             [0, 3, 5, 3], // another motif
-             [0, 4, 2, 0], // down and up
-             [0, 2, 0, 4]  // jump
-         ];
-         const motif = motifs[sceneIndex % motifs.length];
-         // Play a note every 2 steps (eighth notes) to create a faster melody.
-         for (let step = 0; step < loopLength; step++) {
-             if (step % 2 === 0) {
-                 const motifIdx = (step / 2) % motif.length;
-                 const scaleIdx = motif[motifIdx];
-                 if (scaleIdx < scaleNotes.length) {
-                     pattern[step] = { active: true, note: scaleNotes[scaleIdx], velocity: 0x70 };
-                 }
-             }
-         }
+        const motifs = [
+            [0, 2, 4, 2],
+            [0, 3, 5, 3],
+            [0, 4, 2, 0],
+            [0, 2, 0, 4]
+        ];
+        const motif = motifs[sceneIndex % motifs.length];
+        for (let step = 0; step < loopLength; step++) {
+            if (step % 2 === 0) {
+                const motifIdx = (step / 2) % motif.length;
+                const scaleIdx = motif[motifIdx];
+                if (scaleIdx < scaleNotes.length) {
+                    pattern[step] = { active: true, note: scaleNotes[scaleIdx], velocity: 0x70, tie: false };
+                }
+            }
+        }
      }
 
      _generateOtherPattern(pattern, scaleDef, rootNote, loopLength, sceneIndex) {
-         // Reset pattern
-         for (let step = 0; step < pattern.length; step++) {
-             pattern[step] = { active: false, note: rootNote, velocity: 0x60 };
-         }
+        // Reset pattern
+        for (let step = 0; step < pattern.length; step++) {
+            pattern[step] = { active: false, note: rootNote, velocity: 0x60, tie: false };
+        }
 
-         if (!scaleDef) return;
-         const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
-         const rootMidi = noteNameToMidi(rootNote);
-         const scaleNotes = scaleDef.intervals.map(interval => midiNoteName((rootMidi + interval) % 128));
+        if (!scaleDef) return;
+        const rootIdx = MIDI_NOTE_NAMES.indexOf(rootNote);
+        const rootMidi = noteNameToMidi(rootNote);
+        const scaleNotes = scaleDef.intervals.map(interval => midiNoteName((rootMidi + interval) % 128));
 
-         // Create a simple rhythmic pattern: play on every quarter note, using the root and fifth alternating.
-         // Vary the pattern with sceneIndex: sometimes play a chord stab.
-         const useChord = sceneIndex % 3 === 0; // every third scene use a chord (root, third, fifth)
-         const thirdMidi = (rootMidi + 4) % 128; // major third
-         const thirdNote = midiNoteName(thirdMidi);
-         const fifthMidi = (rootMidi + 7) % 128;
-         const fifthNote = midiNoteName(fifthMidi);
+        const useChord = sceneIndex % 3 === 0;
+        const fifthMidi = (rootMidi + 7) % 128;
+        const fifthNote = midiNoteName(fifthMidi);
 
-         for (let step = 0; step < loopLength; step++) {
-             if (step % 4 === 0) { // beats 0,4,8,12
-                 if (useChord) {
-                     // Play a chord: we can't play multiple notes in a mono track, so we'll arpeggiate quickly? Instead we'll just play the root.
-                     pattern[step] = { active: true, note: rootNote, velocity: 0x60 };
-                 } else {
-                     const noteIdx = (step / 4) % 2; // alternate between 0 and 1
-                     const note = noteIdx === 0 ? rootNote : (scaleNotes[4] || rootNote); // fifth if exists
-                     pattern[step] = { active: true, note, velocity: 0x60 };
-                 }
-             }
-         }
+        for (let step = 0; step < loopLength; step++) {
+            if (step % 4 === 0) {
+                if (useChord) {
+                    pattern[step] = { active: true, note: rootNote, velocity: 0x60, tie: false };
+                } else {
+                    const noteIdx = (step / 4) % 2;
+                    const note = noteIdx === 0 ? rootNote : (scaleNotes[4] || rootNote);
+                    pattern[step] = { active: true, note, velocity: 0x60, tie: false };
+                }
+            }
+        }
      }
 
     _activateSlot(bank, slot) {

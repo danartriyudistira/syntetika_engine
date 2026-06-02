@@ -17,7 +17,7 @@ import {
 } from "./src/core/midi-ui.js";
 import { Randomizer } from "./src/core/randomizer.js";
 import { SequencerEngine } from "./src/core/sequencer.js";
-import { loadState, saveState as persistState } from "./src/core/state.js";
+import { loadState, normalizeState, saveState as persistState } from "./src/core/state.js";
 import {
     ResolumeController,
     normalizeResolumeConfig
@@ -26,6 +26,8 @@ import {
     BANK_COUNT,
     BASS_SOUND_STYLES,
     DRUM_SOUND_STYLES,
+    DRUM_STEP_COUNT,
+    DRUM_TRACK_COUNT,
     MELODY_SOUND_STYLES,
     NOTE_STEP_COUNT,
     OTHER_SOUND_STYLES,
@@ -63,6 +65,7 @@ import { $, $$, pulseButton as flashButton, setEngineState as setEngineStateText
 import { clamp, generateNoteNames, isNoteName, midiNoteName, noteNameToMidi } from "./src/core/utils.js";
 import { ShaderEngine } from "./src/core/shader-engine.js";
 import { ShaderEditor } from "./src/core/shader-editor.js";
+import { MediaManager } from "./src/core/media-manager.js";
 import { AIBridge } from "./src/core/ai-bridge.js";
 import { AIEngine } from "./src/core/ai-engine.js";
 import { generateWelcomeMessage } from "./src/core/ai-personality.js";
@@ -95,6 +98,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         canvasContainer: $("#canvas-container"),
         drumBarControls: $("#drum-bar-controls"),
         noteBarControls: $("#note-bar-controls"),
+        tieToggleBtn: $("#tieToggleBtn"),
         moduleTitle: $("#module-title"),
         patternMatrixTitle: $("#pattern-matrix-title"),
         patternMatrixHost: $("#pattern-matrix-host"),
@@ -103,8 +107,13 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         visualToggle: $("#visual-toggle"),
         fpsCounter: $("#fps-counter"),
         popupVisualBtn: $("#popup-visual-btn"),
+        mediaLoadBtn: $("#media-load-btn"),
+        mediaFileInput: $("#media-file-input"),
         aspectToggle: $("#aspect-toggle"),
         aspectMenu: $("#aspect-menu"),
+        aspectCustomWidth: $("#aspect-custom-width"),
+        aspectCustomHeight: $("#aspect-custom-height"),
+        aspectCustomApply: $("#aspect-custom-apply"),
         audioSoundSummaryBtn: $("#audio-sound-summary-btn"),
         audioSoundDetail: $("#audio-sound-detail"),
         audioMixerSummaryBtn: $("#audio-mixer-summary-btn"),
@@ -135,6 +144,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         clearBtn: $("#clearBtn"),
         copyBtn: $("#copyBtn"),
         pasteBtn: $("#pasteBtn"),
+        undoBtn: $("#undoBtn"),
+        redoBtn: $("#redoBtn"),
         modeBtns: $$(".btn-mode"),
         midiModal: $("#midi-modal"),
         midiPanic: $("#midi-panic"),
@@ -185,6 +196,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     let resolumePanelOpen = false;
     let shaderEngine = null;
     let shaderEditor = null;
+    let mediaManager = null;
+    let aiEngine = null;
+    let shaderAudioInterval = null;
     let midiMapPanelOpen = false;
     let midi = null;
     let resolume = null;
@@ -192,6 +206,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     let tapTimes = [];
     let saveStateTimer = null;
     let patternEditGesture = null;
+    let _heldNote = { bass: null, melody: null, other: null };
     let popupVisualWindow = null;
     let popupVisualActive = false;
     let popupVisualAliveCheck = null;
@@ -216,7 +231,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (saveStateTimer) window.clearTimeout(saveStateTimer);
         saveStateTimer = window.setTimeout(() => {
             saveStateTimer = null;
-            persistState(state);
+            persistProjectState(state);
         }, SAVE_STATE_DEBOUNCE_MS);
     }
 
@@ -227,12 +242,23 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
          }
          // Validate state before saving
          if (validatePatternMatrixData(state)) {
-             persistState(state);
+             persistProjectState(state);
          } else {
              console.error("Failed to save state: Invalid pattern matrix data");
              setEngineState("Save failed - invalid data");
          }
      }
+
+    function persistProjectState(nextState) {
+        try {
+            persistState(nextState);
+            return true;
+        } catch (error) {
+            console.error("Failed to save project state:", error);
+            setEngineState(error?.name === "QuotaExceededError" ? "Save failed - storage full" : "Save failed");
+            return false;
+        }
+    }
 
     function syncMatrixState() {
         matrixControl?.syncState();
@@ -288,6 +314,10 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             if (els.fpsCounter) els.fpsCounter.textContent = fps + " FPS";
         };
         if (!state.visualEnabled) shaderEngine.setEnabled(false);
+
+        mediaManager = new MediaManager(shaderEngine);
+        mediaManager.loadFromStorage();
+
         shaderEditor = new ShaderEditor({
             onSwitch: (id) => {
                 const shader = shaderEditor.getShaderById(id);
@@ -306,7 +336,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         await shaderEditor.init();
         if (els.shaderGalleryHost) shaderEditor.renderGallery(els.shaderGalleryHost);
         shaderEngine.startLoop();
-        setInterval(updateShaderAudio, 50);
+        if (shaderAudioInterval) clearInterval(shaderAudioInterval);
+        shaderAudioInterval = setInterval(updateShaderAudio, 50);
     }
 
     function sendToPopupVisual(data) {
@@ -706,7 +737,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             getLoopLength,
             getRate: (kind) => trackRate(kind),
             onTick: runStep,
-            onError: handleSequencerError
+            onError: handleSequencerError,
+            audioCtx: audio?.ctx || null
         });
 
         const aiBridge = new AIBridge({
@@ -726,8 +758,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         });
         window.__aiBridge = aiBridge;
 
-        const aiEngine = new AIEngine(aiBridge);
+        aiEngine = new AIEngine(aiBridge);
         window.__aiEngine = aiEngine;
+        if (shaderEditor) shaderEditor.aiEngine = aiEngine;
         mountAIChat(aiEngine);
         bindEvents();
         applyStateToUI();
@@ -806,11 +839,44 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
         });
 
+        els.mediaLoadBtn?.addEventListener("click", () => {
+            els.mediaFileInput?.click();
+        });
+
+        els.mediaFileInput?.addEventListener("change", async () => {
+            const file = els.mediaFileInput?.files?.[0];
+            if (!file || !mediaManager) return;
+            els.mediaLoadBtn.textContent = "...";
+            try {
+                const mediaId = await mediaManager.importMedia(file);
+                els.mediaLoadBtn.textContent = "✓";
+                setTimeout(() => { els.mediaLoadBtn.textContent = "Load Media"; }, 2000);
+                const tex = await mediaManager.getTexture(mediaId);
+                if (tex && shaderEngine) {
+                    const imageInputs = shaderEngine.getInputDefs().filter(i => i.type === 'image');
+                    if (imageInputs.length > 0) {
+                        shaderEngine.setTexture(imageInputs[0].name, tex);
+                    }
+                }
+            } catch (err) {
+                console.error("Media import failed:", err);
+                els.mediaLoadBtn.textContent = "✗";
+                setTimeout(() => { els.mediaLoadBtn.textContent = "Load Media"; }, 2000);
+            }
+            els.mediaFileInput.value = "";
+        });
+
         document.addEventListener("click", (event) => {
             const aspectBtn = event.target.closest("[data-visual-aspect]");
             if (aspectBtn) {
                 const aspect = aspectBtn.dataset.visualAspect;
                 state.visualAspect = aspect;
+                if (aspect === "custom") {
+                    const w = parseInt(els.aspectCustomWidth?.value, 10) || 1920;
+                    const h = parseInt(els.aspectCustomHeight?.value, 10) || 1080;
+                    state.visualAspectWidth = w;
+                    state.visualAspectHeight = h;
+                }
                 if (els.aspectMenu) els.aspectMenu.classList.remove("open");
                 applyStateToUI();
                 saveState();
@@ -820,6 +886,17 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 els.aspectMenu.classList.remove("open");
                 if (els.aspectToggle) els.aspectToggle.setAttribute("aria-expanded", "false");
             }
+        });
+
+        els.aspectCustomApply?.addEventListener("click", () => {
+            const w = parseInt(els.aspectCustomWidth?.value, 10) || 1920;
+            const h = parseInt(els.aspectCustomHeight?.value, 10) || 1080;
+            state.visualAspect = "custom";
+            state.visualAspectWidth = w;
+            state.visualAspectHeight = h;
+            if (els.aspectMenu) els.aspectMenu.classList.remove("open");
+            applyStateToUI();
+            saveState();
         });
 
         els.resolumeSummaryBtn?.addEventListener("click", () => {
@@ -975,16 +1052,26 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             const genreButton = event.target.closest("[data-drum-genre]");
             if (genreButton) selectDrumGenre(genreButton.dataset.drumGenre);
         });
+        els.tieToggleBtn?.addEventListener("click", toggleTieMode);
         els.clearBtn?.addEventListener("click", clearAll);
         els.copyBtn?.addEventListener("click", copyPattern);
         els.pasteBtn?.addEventListener("click", pastePattern);
+        els.undoBtn?.addEventListener("click", () => performUndo());
+        els.redoBtn?.addEventListener("click", () => performRedo());
         els.midiPanic?.addEventListener("click", () => panicMidi());
         els.midiClose?.addEventListener("click", () => toggleMidiModal(false));
         els.midiModal?.addEventListener("click", (event) => {
             if (event.target === els.midiModal) toggleMidiModal(false);
         });
 
-        window.addEventListener("beforeunload", flushSaveState);
+        window.addEventListener("beforeunload", () => {
+            if (shaderAudioInterval) {
+                clearInterval(shaderAudioInterval);
+                shaderAudioInterval = null;
+            }
+            midi?.stopClockStream();
+            flushSaveState();
+        });
         window.addEventListener("pointermove", paintPatternStepAtPointer);
         window.addEventListener("pointerup", finishPatternEditGesture);
         window.addEventListener("pointercancel", finishPatternEditGesture);
@@ -1082,6 +1169,18 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             event.preventDefault();
             runShortcutCommand("bpm-delta", { value: -1 });
         }
+
+        if ((event.ctrlKey || event.metaKey) && event.key === "z") {
+            event.preventDefault();
+            if (event.shiftKey) { performRedo(); return; }
+            performUndo();
+            return;
+        }
+        if ((event.ctrlKey || event.metaKey) && (event.key === "y")) {
+            event.preventDefault();
+            performRedo();
+            return;
+        }
     }
 
     function shouldIgnoreGlobalShortcut(event) {
@@ -1165,18 +1264,30 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             els.playBtn.textContent = "Stop";
             els.playBtn.classList.add("playing");
             setEngineState("Playing");
+            if (midiConfig.clockOutput && midiConfig.outputID) {
+                midi?.sendMidiStart(midiConfig.outputID);
+                midi?.startClockStream(midiConfig.outputID, state.bpm);
+            }
         } else {
             sequencer.stop();
+            if (midiConfig.clockOutput && midiConfig.outputID) {
+                midi?.sendMidiStop(midiConfig.outputID);
+            }
+            midi?.stopClockStream();
             els.playBtn.textContent = "Play";
             els.playBtn.classList.remove("playing");
             setEngineState("Ready");
             clearCurrentSteps();
+            clearHeldNotes();
         }
         syncMatrixState();
     }
 
     function setBpm(value) {
         state.bpm = clamp(Math.round(Number(value) || state.bpm), 60, 220);
+        if (sequencer.isRunning() && midiConfig.clockOutput && midiConfig.outputID) {
+            midi?.startClockStream(midiConfig.outputID, state.bpm);
+        }
         applyStateToUI();
         syncMatrixState();
         saveState();
@@ -1213,7 +1324,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         const melodyPattern = activePattern("melody");
         const otherPattern = activePattern("other");
 
-        tickEventsFor(steps, "drum").forEach(({ step }) => {
+        tickEventsFor(steps, "drum").forEach(({ step, time }) => {
             for (let track = 0; track < DRUM_VOICE_ORDER.length; track += 1) {
                 const voice = drumVoiceFromTrack(track);
                 const lane = drumLaneForVoice(voice);
@@ -1227,8 +1338,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                     $(`#d-s-${lane}-${step % 16}`)?.classList.add("current");
                 }
                 if (active) {
-                    if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound));
-                    sendMidiOut(track);
+                    if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound, time));
+                    sendMidiOut(track, time);
                     pulseResolume(voice);
                     if (shaderEngine) shaderEngine.triggerDrumVoice(voice);
                     applyParamTriggers(voice);
@@ -1237,7 +1348,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
         });
 
-        tickEventsFor(steps, "bass").forEach(({ step }) => {
+        tickEventsFor(steps, "bass").forEach(({ step, time }) => {
             const bassCell = bassPattern[step];
             const bassPage = Math.floor(step / 64);
             if (state.mode === "bass" && state.bassFollowPage && bassPage !== state.bassPage) {
@@ -1249,12 +1360,33 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
             if (bassCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
-                triggerBass(bassCell.note, velocity);
-                if (shaderEngine) shaderEngine.trigger("bass", noteNameToMidi(bassCell.note) / 127);
+                const prevHeld = _heldNote.bass;
+                const isTied = state.tieMode.bass && bassCell.tie;
+                if (isTied && prevHeld && prevHeld.note === bassCell.note) {
+                    // Tie continuation
+                } else {
+                    if (prevHeld) {
+                        audio.releaseNote("bass", time);
+                        sendMidiNoteOff("bass", prevHeld.note, time);
+                        _heldNote.bass = null;
+                    }
+                    if (isTied) {
+                        audio.noteOn("bass", bassCell.note, time);
+                        sendMidiNoteOn("bass", bassCell.note, velocity, time);
+                        _heldNote.bass = { note: bassCell.note, step };
+                    } else {
+                        triggerBass(bassCell.note, velocity, time);
+                    }
+                    if (shaderEngine) shaderEngine.trigger("bass", noteNameToMidi(bassCell.note) / 127);
+                }
+            } else if (_heldNote.bass) {
+                audio.releaseNote("bass", time);
+                sendMidiNoteOff("bass", _heldNote.bass.note, time);
+                _heldNote.bass = null;
             }
         });
 
-        tickEventsFor(steps, "melody").forEach(({ step }) => {
+        tickEventsFor(steps, "melody").forEach(({ step, time }) => {
             const melodyCell = melodyPattern[step];
             const melodyPage = Math.floor(step / 64);
             if (state.mode === "melody" && state.melodyFollowPage && melodyPage !== state.melodyPage) {
@@ -1266,12 +1398,33 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
             if (melodyCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
-                triggerMelody(melodyCell.note, velocity);
-                if (shaderEngine) shaderEngine.trigger("melody", noteNameToMidi(melodyCell.note) / 127);
+                const prevHeld = _heldNote.melody;
+                const isTied = state.tieMode.melody && melodyCell.tie;
+                if (isTied && prevHeld && prevHeld.note === melodyCell.note) {
+                    // Tie continuation
+                } else {
+                    if (prevHeld) {
+                        audio.releaseNote("melody", time);
+                        sendMidiNoteOff("melody", prevHeld.note, time);
+                        _heldNote.melody = null;
+                    }
+                    if (isTied) {
+                        audio.noteOn("melody", melodyCell.note, time);
+                        sendMidiNoteOn("melody", melodyCell.note, velocity, time);
+                        _heldNote.melody = { note: melodyCell.note, step };
+                    } else {
+                        triggerMelody(melodyCell.note, velocity, time);
+                    }
+                    if (shaderEngine) shaderEngine.trigger("melody", noteNameToMidi(melodyCell.note) / 127);
+                }
+            } else if (_heldNote.melody) {
+                audio.releaseNote("melody", time);
+                sendMidiNoteOff("melody", _heldNote.melody.note, time);
+                _heldNote.melody = null;
             }
         });
 
-        tickEventsFor(steps, "other").forEach(({ step }) => {
+        tickEventsFor(steps, "other").forEach(({ step, time }) => {
             const otherCell = otherPattern[step];
             const otherPage = Math.floor(step / 64);
             if (state.mode === "other" && state.otherFollowPage && otherPage !== state.otherPage) {
@@ -1283,8 +1436,29 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
             if (otherCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
-                triggerOther(otherCell.note, velocity);
-                if (shaderEngine) shaderEngine.trigger("other", noteNameToMidi(otherCell.note) / 127);
+                const prevHeld = _heldNote.other;
+                const isTied = state.tieMode.other && otherCell.tie;
+                if (isTied && prevHeld && prevHeld.note === otherCell.note) {
+                    // Tie continuation
+                } else {
+                    if (prevHeld) {
+                        audio.releaseNote("other", time);
+                        sendMidiNoteOff("other", prevHeld.note, time);
+                        _heldNote.other = null;
+                    }
+                    if (isTied) {
+                        audio.noteOn("other", otherCell.note, time);
+                        sendMidiNoteOn("other", otherCell.note, velocity, time);
+                        _heldNote.other = { note: otherCell.note, step };
+                    } else {
+                        triggerOther(otherCell.note, velocity, time);
+                    }
+                    if (shaderEngine) shaderEngine.trigger("other", noteNameToMidi(otherCell.note) / 127);
+                }
+            } else if (_heldNote.other) {
+                audio.releaseNote("other", time);
+                sendMidiNoteOff("other", _heldNote.other.note, time);
+                _heldNote.other = null;
             }
         });
     }
@@ -1312,11 +1486,11 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         }
     }
 
-    function triggerDrum(track, velocity) {
+    function triggerDrum(track, velocity, time) {
         const voice = drumVoiceFromTrack(track);
         const lane = drumLaneForVoice(voice);
-        if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound));
-        sendMidiOut(track);
+        if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound, time));
+        sendMidiOut(track, time);
         pulseResolume(voice);
         if (shaderEngine) shaderEngine.triggerDrumVoice(voice);
         applyParamTriggers(voice);
@@ -1324,9 +1498,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         pulseLogo("drum");
     }
 
-    function triggerBass(note, velocity) {
-        if (internalAudioEnabled("bass")) triggerAudioSafely("bass", () => audio.playBass(note, state.bassSound));
-        sendBassMidi(note, velocity);
+    function triggerBass(note, velocity, time) {
+        if (internalAudioEnabled("bass")) triggerAudioSafely("bass", () => audio.playBass(note, state.bassSound, time));
+        sendBassMidi(note, velocity, time);
         pulseResolume("bass");
         if (shaderEngine) shaderEngine.trigger("bass", noteNameToMidi(note) / 127);
         applyParamTriggers("bass");
@@ -1334,9 +1508,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         pulseLogo("bass");
     }
 
-    function triggerMelody(note, velocity) {
-        if (internalAudioEnabled("melody")) triggerAudioSafely("melody", () => audio.playMelody(note, state.melodySound));
-        sendMelodyMidi(note, velocity);
+    function triggerMelody(note, velocity, time) {
+        if (internalAudioEnabled("melody")) triggerAudioSafely("melody", () => audio.playMelody(note, state.melodySound, time));
+        sendMelodyMidi(note, velocity, time);
         pulseResolume("melody");
         if (shaderEngine) shaderEngine.trigger("melody", noteNameToMidi(note) / 127);
         applyParamTriggers("melody");
@@ -1344,9 +1518,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         pulseLogo("melody");
     }
 
-    function triggerOther(note, velocity) {
-        if (internalAudioEnabled("other")) triggerAudioSafely("other", () => audio.playOther(note, state.otherSound));
-        sendOtherMidi(note, velocity);
+    function triggerOther(note, velocity, time) {
+        if (internalAudioEnabled("other")) triggerAudioSafely("other", () => audio.playOther(note, state.otherSound, time));
+        sendOtherMidi(note, velocity, time);
         pulseResolume("other");
         if (shaderEngine) shaderEngine.trigger("other", noteNameToMidi(note) / 127);
         applyParamTriggers("other");
@@ -1447,6 +1621,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 const data = notePattern[index] || { active: false, note: "C1" };
                 const cell = createStep(`${idPrefix}-s-${index}`);
                 cell.classList.toggle("bass-active", data.active);
+                cell.classList.toggle("tie", data.tie);
                 if (data.active) {
                     const note = document.createElement("span");
                     note.className = "step-note";
@@ -1468,6 +1643,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             if (!isPrimaryPointer(event)) return;
             event.preventDefault();
             hideNotePicker();
+            if (!patternEditGesture) window.__aiBridge?.saveUndo();
             const value = !drumPattern[track][step];
             patternEditGesture = { kind: "drum", value, lastTrack: track, lastStep: step };
             updateDrumStepCell(cell, drumPattern, track, step, value, true);
@@ -1479,8 +1655,10 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         cell.addEventListener("keydown", (event) => {
             if (!isStepKeyboardToggle(event)) return;
             event.preventDefault();
+            if (!patternEditGesture) window.__aiBridge?.saveUndo();
             updateDrumStepCell(cell, drumPattern, track, step, !drumPattern[track][step], true);
             saveState();
+            updateUndoButtons();
         });
     }
 
@@ -1490,42 +1668,63 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         cell.addEventListener("pointerdown", (event) => {
             if (!isPrimaryPointer(event)) return;
             event.preventDefault();
+            if (state.tieMode[kind] && data.active && (event.shiftKey || event.ctrlKey)) {
+                finishPatternEditGesture();
+                data.tie = !data.tie;
+                cell.classList.toggle("tie", data.tie);
+                saveState();
+                updateUndoButtons();
+                return;
+            }
              if (state[editKey] && data.active) {
                  finishPatternEditGesture();
                  showNotePicker(kind, index, event.currentTarget);
                  return;
              }
+             if (!patternEditGesture) window.__aiBridge?.saveUndo();
              hideNotePicker();
-             const value = !data.active;
-             patternEditGesture = { kind, value, lastStep: index };
-             updateNoteStepCell(cell, kind, data, value, true);
-               // If not in edit mode, clicking a step sets loop length based on which row (16/32/64 step) within the page
-               if (kind !== "drum" && !state[editKey]) {
-                   const pageOff = notePageOffset(kind);
-                   const relative = index - pageOff; // 0..47
-                   const rowIndex = Math.floor(relative / 16); // 0,1,2
-                    const noteLoopLengths = [16, 32, 64];
-                   const newLoop = noteLoopLengths[rowIndex];
-                   if (newLoop && newLoop !== getLoopLength(kind)) {
-                       setNoteLoopLength(kind, newLoop);
-                   }
-                   renderGrid();
-                   saveState();
-               }
+             if (state.tieMode[kind] && data.active) {
+                 const newTie = !data.tie;
+                 data.tie = newTie;
+                 cell.classList.toggle("tie", newTie);
+                 patternEditGesture = { kind, subKind: "tie", value: newTie, lastStep: index };
+             } else {
+                 const value = !data.active;
+                 patternEditGesture = { kind, subKind: "active", value, lastStep: index };
+                 updateNoteStepCell(cell, kind, data, value, true);
+             }
+
         });
+
         cell.addEventListener("pointerenter", (event) => {
             if (!isPaintGesture(event, kind)) return;
-            updateNoteStepCell(cell, kind, data, patternEditGesture.value, patternEditGesture.value);
+            if (patternEditGesture.subKind === "tie") {
+                if (data.active) {
+                    data.tie = patternEditGesture.value;
+                    cell.classList.toggle("tie", data.tie);
+                }
+            } else {
+                updateNoteStepCell(cell, kind, data, patternEditGesture.value, patternEditGesture.value);
+            }
         });
         cell.addEventListener("keydown", (event) => {
             if (!isStepKeyboardToggle(event)) return;
             event.preventDefault();
+            if (state.tieMode[kind] && data.active && event.shiftKey) {
+                data.tie = !data.tie;
+                cell.classList.toggle("tie", data.tie);
+                saveState();
+                updateUndoButtons();
+                return;
+            }
             if (state[editKey] && data.active) {
                 showNotePicker(kind, index, event.currentTarget);
                 return;
             }
+            if (!patternEditGesture) window.__aiBridge?.saveUndo();
             updateNoteStepCell(cell, kind, data, !data.active, true);
             saveState();
+            updateUndoButtons();
         });
     }
 
@@ -1549,7 +1748,11 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             return;
         }
         if (!SEQUENCER_MODES.includes(kind) || kind === "drum") return;
-        paintNoteStepRange(kind, step, value);
+        if (patternEditGesture.subKind === "tie") {
+            paintTieStepRange(kind, step, value);
+        } else {
+            paintNoteStepRange(kind, step, value);
+        }
         patternEditGesture.lastStep = step;
     }
 
@@ -1580,6 +1783,22 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             const data = pattern[nextStep];
             const nextCell = document.querySelector(`.step[data-edit-kind="${kind}"][data-edit-step="${nextStep}"]`);
             if (data && nextCell) updateNoteStepCell(nextCell, kind, data, value, value);
+        }
+    }
+
+    function paintTieStepRange(kind, step, value) {
+        const pattern = activePattern(kind);
+        const start = Number.isInteger(patternEditGesture?.lastStep)
+            ? Math.min(patternEditGesture.lastStep, step) : step;
+        const end = Number.isInteger(patternEditGesture?.lastStep)
+            ? Math.max(patternEditGesture.lastStep, step) : step;
+        for (let nextStep = start; nextStep <= end; nextStep += 1) {
+            const data = pattern[nextStep];
+            const nextCell = document.querySelector(`.step[data-edit-kind="${kind}"][data-edit-step="${nextStep}"]`);
+            if (data && nextCell && data.active) {
+                data.tie = Boolean(value);
+                nextCell.classList.toggle("tie", data.tie);
+            }
         }
     }
 
@@ -1639,6 +1858,10 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         const nextValue = Boolean(value);
         const changed = data.active !== nextValue;
         data.active = nextValue;
+        if (!nextValue) {
+            data.tie = false;
+            cell.classList.remove("tie");
+        }
         cell.classList.toggle("bass-active", nextValue);
         cell.querySelector(".step-note")?.remove();
         if (nextValue) {
@@ -1654,6 +1877,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (!patternEditGesture) return;
         patternEditGesture = null;
         saveState();
+        updateUndoButtons();
     }
 
     function isPrimaryPointer(event) {
@@ -2027,7 +2251,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                  if (!Array.isArray(state.presetLoopLengths[mode][bank]) || state.presetLoopLengths[mode][bank].length !== PRESET_COUNT) return false;
                  for (let slot = 0; slot < PRESET_COUNT; slot++) {
                      const length = state.presetLoopLengths[mode][bank][slot];
-                     const allowed = mode === "drum" ? [16, 32, 64] : [64, 128, 256];
+                     const allowed = mode === "drum" ? [16, 32, 64] : [16, 32, 64, 128, 256];
                      if (!allowed.includes(length)) return false;
                  }
              }
@@ -2060,6 +2284,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
  
      function handleFileMenuAction(action) {
          closeFileMenu();
+         if (action === "new") newProject();
          if (action === "save") {
              flushSaveState();
              flashFileMenuLabel("Saved");
@@ -2071,16 +2296,56 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
          if (action === "help") showFileHelp();
      }
 
+      function updateProjectNameUI() {
+          const el = document.getElementById("project-name");
+          if (!el) return;
+          const name = state.projectName || "Untitled";
+          el.textContent = name.length > 10 ? name.slice(0, 10) + ".." : name;
+          document.title = state.projectName
+              ? `${state.projectName} - Syntetika Engine`
+              : "Syntetika Engine - Offline Console";
+      }
+
+      function newProject() {
+          const confirmed = window.confirm("Buat project baru kosong? Pattern saat ini akan diganti dengan preset kosong.");
+          if (!confirmed) return;
+
+          sequencer?.stop();
+          clearHeldNotes();
+          state = normalizeState(null);
+          state.projectName = "Untitled";
+
+         if (!validatePatternMatrixData(state)) {
+             window.alert("Gagal membuat project kosong: default state tidak valid.");
+             setEngineState("New project failed");
+             return;
+         }
+
+         if (!persistProjectState(state)) {
+             window.alert("Gagal menyimpan project kosong. Storage browser kemungkinan penuh.");
+             return;
+         }
+
+         setEngineState("New project created");
+         window.location.reload();
+     }
+
      function exportProjectFile() {
          flushSaveState();
-         const project = {
-             app: "Syntetika Engine",
-             version: 1,
-             exportedAt: new Date().toISOString(),
-             state,
-             midiConfig
-         };
-         const blob = new Blob([JSON.stringify(project, null, 2)], { type: "application/json" });
+         if (!validatePatternMatrixData(state)) {
+             window.alert("Project tidak bisa diexport karena data pattern belum valid. Coba Save lagi atau reload aplikasi.");
+             return;
+         }
+          const normalized = normalizeState(state);
+          const project = {
+              app: "Syntetika Engine",
+              version: 2,
+              exportedAt: new Date().toISOString(),
+              projectName: normalized.projectName,
+              state: normalized,
+              midiConfig
+          };
+         const blob = new Blob([JSON.stringify(project)], { type: "application/json" });
          const url = URL.createObjectURL(blob);
          const anchor = document.createElement("a");
          anchor.href = url;
@@ -2093,63 +2358,74 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
          setEngineState("Project exported");
      }
 
-    function openProjectFile() {
-         const file = els.projectOpenInput?.files?.[0];
-         if (!file) return;
-         
-         // Check file size (limit to 10MB)
-         if (file.size > 10 * 1024 * 1024) {
-             setEngineState("File too large");
-             window.alert("Ukuran file terlalu besar. Maksimal 10MB.");
-             els.projectOpenInput.value = "";
-             return;
-         }
-         
-         const reader = new FileReader();
-         reader.addEventListener("load", () => {
-             try {
-                 const project = JSON.parse(String(reader.result || "{}"));
-                 
-                 // Validate project structure
-                 if (!project || typeof project !== "object") {
-                     throw new Error("Invalid project file structure");
-                 }
-                 
-                 // Handle both old format (direct state) and new format (with app/version)
-                 const nextState = project.state || project;
-                 
-                 // Validate essential state properties
-                 if (!nextState || typeof nextState !== "object") {
-                     throw new Error("Invalid project state");
-                 }
-                 
-                  // Check for required state properties
-                  const requiredProps = ["bpm", "mode", "mixer", "memory", "presetLoopLengths", "presetTrackRates", "activeBanks", "activeSlots"];
-                  for (const prop of requiredProps) {
-                      if (!(prop in nextState)) {
-                          throw new Error(`Missing required property: ${prop}`);
-                      }
+     function openProjectFile() {
+          const file = els.projectOpenInput?.files?.[0];
+          if (!file) return;
+
+          if (file.size > 50 * 1024 * 1024) {
+              setEngineState("File too large");
+              window.alert("Ukuran file terlalu besar. Maksimal 50MB.");
+              els.projectOpenInput.value = "";
+              return;
+          }
+
+          const reader = new FileReader();
+
+          reader.addEventListener("error", () => {
+              console.error("FileReader error:", reader.error);
+              setEngineState("Open failed - file read error");
+              window.alert("Gagal membaca file: " + (reader.error?.message || "unknown error"));
+              els.projectOpenInput.value = "";
+          });
+
+          reader.addEventListener("load", () => {
+              try {
+                  const text = reader.result;
+                  if (!text || typeof text !== "string" || text.trim().length === 0) {
+                      throw new Error("File kosong atau format tidak dikenal");
                   }
-                  
-                  // Validate pattern matrix specific data
-                  if (!validatePatternMatrixData(nextState)) {
-                      throw new Error("Invalid pattern matrix data");
+
+                  const project = JSON.parse(text);
+
+                  if (!project || typeof project !== "object" || Array.isArray(project)) {
+                      throw new Error("Invalid project file structure");
                   }
-                 
-                 localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-                 if (project?.midiConfig) saveMidiConfig(project.midiConfig);
-                 setEngineState("Project opened - pattern matrix loaded");
-                 window.location.reload();
-             } catch (error) {
-                 console.error("Error loading project:", error);
-                 setEngineState("Open failed");
-                 window.alert(`Gagal memuat file project: ${error.message}`);
-             } finally {
-                 els.projectOpenInput.value = "";
-             }
-         });
-         reader.readAsText(file);
-    }
+
+                  const nextState = project.state || project;
+
+                  if (!nextState || typeof nextState !== "object" || Array.isArray(nextState)) {
+                      throw new Error("Invalid project state");
+                  }
+
+                   if (!nextState.memory || typeof nextState.memory !== "object") {
+                       throw new Error("State missing pattern matrix data");
+                   }
+
+                   const projectName = project?.projectName
+                       || file.name.replace(/\.json$/i, "").slice(0, 20);
+
+                   const normalizedState = normalizeState({ ...nextState, projectName });
+
+                   if (!validatePatternMatrixData(normalizedState)) {
+                       throw new Error("Invalid pattern matrix data - possible data corruption");
+                   }
+
+                   state = normalizedState;
+                   localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedState));
+                   if (project?.midiConfig) saveMidiConfig(project.midiConfig);
+                   setEngineState("Project opened");
+                   window.location.reload();
+              } catch (error) {
+                  console.error("Error loading project:", error);
+                  setEngineState("Open failed");
+                  window.alert(`Gagal memuat file project: ${error.message}`);
+              } finally {
+                  els.projectOpenInput.value = "";
+              }
+          });
+
+          reader.readAsText(file);
+     }
 
     function showFileHelp() {
         window.alert([
@@ -2160,6 +2436,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             "Dibuat dengan Codex oleh danartri @danartri.",
             "",
             "File:",
+            "New Project: buat project kosong.",
             "Save: simpan project di browser.",
             "Save As: export project JSON.",
             "Open: buka project JSON.",
@@ -2338,6 +2615,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function randomize() {
+        window.__aiBridge?.saveUndo();
         randomizer.apply({
             mode: state.mode,
             role: state.randomRole,
@@ -2404,6 +2682,25 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         state[followKey] = !state[followKey];
         applyStateToUI();
         saveState();
+    }
+
+    function toggleTieMode() {
+        const kind = state.mode;
+        if (kind === "drum") return;
+        state.tieMode[kind] = !state.tieMode[kind];
+        if (!state.tieMode[kind]) clearHeldNotes(kind);
+        updateTieToggleUI();
+        saveState();
+    }
+
+    function updateTieToggleUI() {
+        if (els.tieToggleBtn) {
+            const isDrum = state.mode === "drum";
+            const active = !isDrum && state.tieMode[state.mode];
+            els.tieToggleBtn.classList.toggle("active", active);
+            els.tieToggleBtn.textContent = active ? "Tie On" : "Tie";
+            els.tieToggleBtn.hidden = isDrum;
+        }
     }
 
     function notePageCount(kind) {
@@ -2501,18 +2798,20 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function clearAll() {
+        window.__aiBridge?.saveUndo();
         if (state.mode === "drum") {
             setActivePattern("drum", Array.from({ length: DRUM_VOICE_ORDER.length }, () => Array(64).fill(false)));
         } else if (state.mode === "bass") {
-            setActivePattern("bass", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C1" })));
+            setActivePattern("bass", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C1", tie: false })));
         } else if (state.mode === "melody") {
-            setActivePattern("melody", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" })));
+            setActivePattern("melody", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2", tie: false })));
         } else {
-            setActivePattern("other", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2" })));
+            setActivePattern("other", Array.from({ length: NOTE_STEP_COUNT }, () => ({ active: false, note: "C2", tie: false })));
         }
         clearCurrentSteps();
         renderGrid();
         saveState();
+        updateUndoButtons();
     }
 
     function copyPattern() {
@@ -2524,6 +2823,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
     function pastePattern() {
         if (!copiedPattern) return;
+        window.__aiBridge?.saveUndo();
         const data = JSON.parse(copiedPattern);
         if (state.mode === "drum") {
             pasteDrumBar(data);
@@ -2542,7 +2842,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         function padNotePattern(arr, defaultNote) {
             return Array.from({ length: NOTE_STEP_COUNT }, (_, i) => {
                 const src = arr[i] || {};
-                return { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote };
+                return { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote, tie: src.tie === true };
             });
         }
         if (state.mode === "bass" && Array.isArray(data) && data.length >= 64) {
@@ -2623,12 +2923,13 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         const defaultNote = kind === "bass" ? "C1" : "C2";
         for (let i = 0; i < 64; i += 1) {
             const src = data.data[i] || {};
-            pattern[pageOff + i] = { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote };
+            pattern[pageOff + i] = { active: Boolean(src.active), note: isNoteName(src.note) ? src.note : defaultNote, tie: src.tie === true };
         }
     }
 
     function shiftSelectedPitch(semitones) {
         if (state.mode === "drum" || !Number.isFinite(semitones)) return;
+        window.__aiBridge?.saveUndo();
         const pattern = activePattern(state.mode);
         pattern.forEach((step) => {
             if (!step || !isNoteName(step.note)) return;
@@ -2637,9 +2938,11 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         hideNotePicker();
         renderGrid();
         saveState();
+        updateUndoButtons();
     }
 
     function applyStateToUI() {
+        updateProjectNameUI();
         els.body?.classList.toggle("ui-edit", state.uiMode === "edit");
         els.body?.classList.toggle("ui-performance", state.uiMode === "performance");
         els.body?.classList.toggle("left-panel-collapsed", leftPanelCollapsed);
@@ -2664,6 +2967,16 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (els.canvasContainer) {
             const aspect = state.visualAspect || "fill";
             els.canvasContainer.dataset.aspect = aspect;
+            const wrap = document.getElementById("canvas-aspect-wrap");
+            if (aspect === "custom") {
+                const w = state.visualAspectWidth || 1920;
+                const h = state.visualAspectHeight || 1080;
+                if (wrap) wrap.style.aspectRatio = `${w} / ${h}`;
+                if (els.aspectCustomWidth) els.aspectCustomWidth.value = w;
+                if (els.aspectCustomHeight) els.aspectCustomHeight.value = h;
+            } else {
+                if (wrap) wrap.style.aspectRatio = "";
+            }
             const aspectToggle = els.aspectToggle;
             if (aspectToggle) {
                 const labels = { fill: "Aspect: Fill", "16-9": "Aspect: 16:9", "4-3": "Aspect: 4:3", "1-1": "Aspect: 1:1", "9-16": "Aspect: 9:16", custom: "Aspect: Custom" };
@@ -2788,6 +3101,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             const allSelected = SEQUENCER_MODES.every((mode) => activeBankFor(mode) === displayedBank && activeSlotFor(mode) === slot);
             button.classList.toggle("active", allSelected);
         });
+        updateUndoButtons();
+        updateTieToggleUI();
     }
 
     function renderPitchGeneratorControls() {
@@ -3054,11 +3369,83 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         });
     }
 
-    function handleMidiMessage(inputID, data) {
-        const [status, note, velocity] = data;
+     let _midiClockTimes = [];
+     let _midiClockBpm = 0;
+     let _midiClockBpmTimer = null;
+
+     function handleMidiMessage(inputID, data) {
+        const [status, b1, b2] = data;
         const command = status & 0xf0;
+
+        // MIDI Clock input
+        if (status === 0xF8) {
+            const now = performance.now();
+            _midiClockTimes = _midiClockTimes.filter((t) => now - t < 2000);
+            if (_midiClockTimes.length > 1) {
+                const intervals = [];
+                for (let i = 1; i < _midiClockTimes.length; i++) {
+                    intervals.push(_midiClockTimes[i] - _midiClockTimes[i - 1]);
+                }
+                const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+                const bpm = 60000 / (avgInterval * 24);
+                if (bpm >= 20 && bpm <= 999) {
+                    _midiClockBpm = bpm;
+                    if (midiConfig.syncSource === "midi-clock") {
+                        setBpm(Math.round(bpm));
+                    }
+                }
+            }
+            _midiClockTimes.push(now);
+            if (_midiClockTimes.length > 100) _midiClockTimes = _midiClockTimes.slice(-50);
+            if (midiConfig.midiThrough && midiConfig.outputID) {
+                midi?.sendRaw(midiConfig.outputID, data);
+            }
+            return;
+        }
+
+        // MIDI Start
+        if (status === 0xFA) {
+            if (midiConfig.syncSource === "midi-clock" && !sequencer.isRunning()) {
+                togglePlay();
+            }
+            if (midiConfig.midiThrough && midiConfig.outputID) {
+                midi?.sendRaw(midiConfig.outputID, data);
+            }
+            return;
+        }
+
+        // MIDI Stop
+        if (status === 0xFC) {
+            if (midiConfig.syncSource === "midi-clock" && sequencer.isRunning()) {
+                togglePlay();
+            }
+            if (midiConfig.midiThrough && midiConfig.outputID) {
+                midi?.sendRaw(midiConfig.outputID, data);
+            }
+            return;
+        }
+
+        // MIDI Continue
+        if (status === 0xFB) {
+            if (midiConfig.syncSource === "midi-clock" && !sequencer.isRunning()) {
+                togglePlay();
+            }
+            if (midiConfig.midiThrough && midiConfig.outputID) {
+                midi?.sendRaw(midiConfig.outputID, data);
+            }
+            return;
+        }
+
+        // MIDI Through for non-clock messages
+        if (midiConfig.midiThrough && midiConfig.outputID) {
+            midi?.sendRaw(midiConfig.outputID, data);
+        }
+
+        if (command !== 0x90 || b2 === 0) return;
+
         const channel = (status & 0x0f) + 1;
-        if (command !== 0x90 || velocity === 0) return;
+        const note = b1;
+        const velocity = b2;
 
         if (learningTrack !== null) {
             const track = getMidiTrack(learningTrack);
@@ -3116,39 +3503,100 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (els.midiStatus) els.midiStatus.textContent = text;
     }
 
+    function clearHeldNotes(kind) {
+        const kinds = kind ? [kind] : Object.keys(_heldNote);
+        kinds.forEach((k) => {
+            const held = _heldNote[k];
+            if (held) {
+                audio.releaseNote(k);
+                sendMidiNoteOff(k, held.note);
+                _heldNote[k] = null;
+            }
+        });
+    }
+
     function panicMidi() {
         midi?.panic();
+        midi?.stopClockStream();
+        clearHeldNotes();
         setMidiStatus("Panic terkirim: All Notes Off ke semua output MIDI.");
     }
 
-    function sendMidiOut(track) {
+    function sendMidiOut(track, time) {
         const routing = getMidiTrack(`drum-${drumVoiceFromTrack(track)}`);
         if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
-        midi.sendNotes(midiConfig.outputID, routing.outputChannel, routing.outNotes, 0x7f, 120);
+        const doSend = () => midi.sendNotes(midiConfig.outputID, routing.outputChannel, routing.outNotes, 0x7f, 120);
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
     }
 
-    function sendBassMidi(noteName, velocity) {
+    function sendBassMidi(noteName, velocity, time) {
         const routing = getMidiTrack("bassline");
         if (!midi?.isReady() || !midiConfig.outputID) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
         const vel = velocity ?? 0x65;
-        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(90, stepDurationMs() * 0.82));
+        const doSend = () => midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(90, stepDurationMs() * 0.82));
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
     }
 
-    function sendMelodyMidi(noteName, velocity) {
+    function sendMelodyMidi(noteName, velocity, time) {
         const routing = getMidiTrack("melody");
         if (!midi?.isReady() || !midiConfig.outputID) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
         const vel = velocity ?? 0x6f;
-        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(120, stepDurationMs() * 1.2));
+        const doSend = () => midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(120, stepDurationMs() * 1.2));
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
     }
 
-    function sendOtherMidi(noteName, velocity) {
+    function sendOtherMidi(noteName, velocity, time) {
         const routing = getMidiTrack("other");
         if (!midi?.isReady() || !midiConfig.outputID) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
         const vel = velocity ?? 0x62;
-        midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(110, stepDurationMs()));
+        const doSend = () => midi.sendNote(midiConfig.outputID, routing.outputChannel, note, vel, Math.max(110, stepDurationMs()));
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
+    }
+
+    function sendMidiNoteOn(kind, noteName, velocity, time) {
+        const trackKey = { bass: "bassline", melody: "melody", other: "other" }[kind];
+        const routing = getMidiTrack(trackKey);
+        if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
+        const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
+        const vel = velocity ?? 0x65;
+        const doSend = () => midi.sendNoteOn(midiConfig.outputID, routing.outputChannel, note, vel);
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
+    }
+
+    function sendMidiNoteOff(kind, noteName, time) {
+        const trackKey = { bass: "bassline", melody: "melody", other: "other" }[kind];
+        const routing = getMidiTrack(trackKey);
+        if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
+        const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
+        const doSend = () => midi.sendNoteOff(midiConfig.outputID, routing.outputChannel, note);
+        if (time != null && audio?.ctx) {
+            const delay = Math.max(0, (time - audio.ctx.currentTime) * 1000);
+            if (delay > 1) { setTimeout(doSend, delay); return; }
+        }
+        doSend();
     }
 
     function handleMatrixCommand(command, payload) {
@@ -3281,6 +3729,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             <div class="ai-chat-header">
                 <span class="ai-chat-title">SYNTHeTIKA</span>
                 <span class="ai-chat-subtitle">AI Music Producer</span>
+                <span class="ai-chat-ollama-status" id="ai-chat-ollama-status" title="Ollama connection">○</span>
+                <button class="ai-chat-ollama-btn" id="ai-chat-ollama-btn" type="button" title="Connect to local Ollama">Ollama</button>
                 <button class="ai-chat-clear" id="ai-chat-clear" type="button" title="Clear chat">🗑</button>
             </div>
             <div class="ai-chat-messages" id="ai-chat-messages"></div>
@@ -3305,6 +3755,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         const sendBtn = container.querySelector("#ai-chat-send");
         const clearBtn = container.querySelector("#ai-chat-clear");
         const genBtn = container.querySelector("#ai-chat-gen");
+        const ollamaBtn = container.querySelector("#ai-chat-ollama-btn");
+        const ollamaStatus = container.querySelector("#ai-chat-ollama-status");
 
         let open = false;
 
@@ -3317,7 +3769,31 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
         toggle.addEventListener("click", toggleOpen);
 
+        function updateOllamaStatus(connected) {
+            ollamaStatus.textContent = connected ? "●" : "○";
+            ollamaStatus.style.color = connected ? "#4f4" : "#888";
+            ollamaBtn.textContent = connected ? "Disconnect" : "Ollama";
+            ollamaBtn.title = connected ? "Disconnect from Ollama" : "Connect to local Ollama";
+        }
+
+        ollamaBtn.addEventListener("click", async () => {
+            if (engine?.isOllamaConnected()) {
+                engine.disconnectOllama();
+                updateOllamaStatus(false);
+                return;
+            }
+            ollamaBtn.textContent = "Connecting...";
+            const ok = await engine?.connectOllama();
+            updateOllamaStatus(ok);
+            if (ok) {
+                addMessage("🔗 Connected to Ollama. Ask me anything about music!");
+            } else {
+                addMessage("❌ Could not connect to Ollama. Make sure it's running on localhost:11434");
+            }
+        });
+
         function addMessage(text, isUser = false) {
+            hideThinking();
             const msg = document.createElement("div");
             msg.className = `ai-chat-msg ${isUser ? "user" : "assistant"}`;
             const pre = document.createElement("pre");
@@ -3327,15 +3803,36 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             messages.scrollTop = messages.scrollHeight;
         }
 
+        function showThinking() {
+            hideThinking();
+            const msg = document.createElement("div");
+            msg.className = "ai-chat-msg assistant thinking";
+            msg.id = "ai-thinking-msg";
+            const pre = document.createElement("pre");
+            pre.textContent = "...";
+            msg.appendChild(pre);
+            messages.appendChild(msg);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function hideThinking() {
+            const el = document.getElementById("ai-thinking-msg");
+            if (el) el.remove();
+        }
+
         function sendMessage() {
             const text = input.value.trim();
             if (!text) return;
             addMessage(text, true);
             input.value = "";
             input.style.height = "auto";
+            showThinking();
 
             if (engine) {
-                engine.process(text);
+                engine.process(text).catch(err => {
+                    hideThinking();
+                    addMessage(`Error: ${err.message}`);
+                });
             } else {
                 addMessage("AI engine not ready.");
             }
@@ -3440,6 +3937,22 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         });
 
         addMessage(generateWelcomeMessage());
+    }
+
+    function performUndo() {
+        if (!window.__aiBridge?.undo()) return;
+        updateUndoButtons();
+    }
+
+    function performRedo() {
+        if (!window.__aiBridge?.redo()) return;
+        updateUndoButtons();
+    }
+
+    function updateUndoButtons() {
+        const bridge = window.__aiBridge;
+        if (els.undoBtn) els.undoBtn.disabled = !bridge?.canUndo();
+        if (els.redoBtn) els.redoBtn.disabled = !bridge?.canRedo();
     }
 
     window.SyntetikaEngine = {

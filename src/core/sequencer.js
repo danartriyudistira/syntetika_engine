@@ -1,27 +1,25 @@
 export class SequencerEngine {
-    constructor({ getBpm, getLoopLength, getRate, onTick, onError } = {}) {
+    constructor({ getBpm, getLoopLength, getRate, onTick, onError, audioCtx } = {}) {
         this.getBpm = getBpm;
         this.getLoopLength = getLoopLength;
         this.getRate = getRate;
         this.onTick = onTick;
         this.onError = onError;
+        this.audioCtx = audioCtx;
         this.running = false;
-        this.timer = 0;
-        this.nextTickAt = 0;
-        this.subTimers = [];
+        this.timer = null;
         this.tickCount = 0;
         this.swing = 0;
+        this.lookaheadSec = 0.1;
+        this.scheduleIntervalMs = 25;
         this.steps = {
-            drum: 0,
-            bass: 0,
-            melody: 0,
-            other: 0
+            drum: 0, bass: 0, melody: 0, other: 0
         };
         this.lastSteps = {
-            drum: 0,
-            bass: 0,
-            melody: 0,
-            other: 0
+            drum: 0, bass: 0, melody: 0, other: 0
+        };
+        this.nextStepTimes = {
+            drum: 0, bass: 0, melody: 0, other: 0
         };
     }
 
@@ -33,29 +31,38 @@ export class SequencerEngine {
         if (this.running) return;
         this.reset();
         this.running = true;
-        this.nextTickAt = performance.now();
-        this.tick();
+        const now = this._now();
+        Object.keys(this.nextStepTimes).forEach((k) => {
+            this.nextStepTimes[k] = now;
+        });
+        this._scheduleLoop();
     }
 
     stop() {
         this.running = false;
-        window.clearTimeout(this.timer);
-        this.clearSubTimers();
-        this.timer = 0;
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
     }
 
     nudge(ms) {
         if (!this.running) return;
-        this.nextTickAt += Number(ms) || 0;
+        const offset = Number(ms) || 0;
+        Object.keys(this.nextStepTimes).forEach((k) => {
+            this.nextStepTimes[k] += offset / 1000;
+        });
     }
 
     resync() {
         this.reset();
         if (!this.running) return;
-        window.clearTimeout(this.timer);
-        this.clearSubTimers();
-        this.nextTickAt = performance.now();
-        this.tick();
+        if (this.timer) clearTimeout(this.timer);
+        const now = this._now();
+        Object.keys(this.nextStepTimes).forEach((k) => {
+            this.nextStepTimes[k] = now;
+        });
+        this._scheduleLoop();
     }
 
     reset() {
@@ -64,83 +71,6 @@ export class SequencerEngine {
             this.lastSteps[kind] = 0;
         });
         this.tickCount = 0;
-        this.clearSubTimers();
-    }
-
-    tick() {
-        if (!this.running) return;
-
-        const duration = this.stepDurationMs();
-        const swingDelay = this.tickCount % 2 === 1 ? duration * this.swing * 0.25 : 0;
-        const tickEvents = this.createTickEvents(duration);
-        this.lastSteps = lastStepsFromEvents(tickEvents, this.lastSteps);
-        try {
-            this.onTick?.(tickEvents);
-            this.scheduleSubTicks(tickEvents);
-        } catch (error) {
-            this.onError?.(error, tickEvents);
-        } finally {
-            const now = performance.now();
-            if (now - this.nextTickAt > duration * 2) {
-                this.nextTickAt = now;
-            }
-            this.nextTickAt += duration + swingDelay;
-            this.tickCount += 1;
-            const delay = Math.max(1, this.nextTickAt - performance.now());
-            this.timer = window.setTimeout(() => this.tick(), delay);
-        }
-    }
-
-    createTickEvents(duration) {
-        return Object.keys(this.steps).reduce((events, kind) => {
-            events[kind] = this.createEventsForKind(kind, duration);
-            return events;
-        }, {});
-    }
-
-    createEventsForKind(kind, duration) {
-        const rate = this.rateFor(kind);
-        if (rate === 0.5 && this.tickCount % 2 === 1) return [];
-
-        const events = [{
-            kind,
-            step: this.steps[kind],
-            delayMs: 0
-        }];
-        this.steps[kind] = (this.steps[kind] + 1) % this.loopLengthFor(kind);
-
-        if (rate === 2) {
-            events.push({
-                kind,
-                step: this.steps[kind],
-                delayMs: duration * 0.5
-            });
-            this.steps[kind] = (this.steps[kind] + 1) % this.loopLengthFor(kind);
-        }
-
-        return events;
-    }
-
-    scheduleSubTicks(tickEvents) {
-        this.clearSubTimers();
-        Object.values(tickEvents).flat().forEach((event) => {
-            if (!event.delayMs) return;
-            const timer = window.setTimeout(() => {
-                if (!this.running) return;
-                this.lastSteps[event.kind] = event.step;
-                try {
-                    this.onTick?.({ [event.kind]: [event] });
-                } catch (error) {
-                    this.onError?.(error, { [event.kind]: [event] });
-                }
-            }, Math.max(1, event.delayMs));
-            this.subTimers.push(timer);
-        });
-    }
-
-    clearSubTimers() {
-        this.subTimers.forEach((timer) => window.clearTimeout(timer));
-        this.subTimers = [];
     }
 
     currentStep(kind) {
@@ -155,6 +85,14 @@ export class SequencerEngine {
         return (60000 / this.getBpm()) / 4;
     }
 
+    _baseStepSec() {
+        return (60 / this.getBpm()) / 4;
+    }
+
+    _stepDuration(kind) {
+        return this._baseStepSec() / this.rateFor(kind);
+    }
+
     loopLengthFor(kind) {
         return Math.max(1, Number(this.getLoopLength(kind)) || 1);
     }
@@ -163,12 +101,64 @@ export class SequencerEngine {
         const rate = Number(this.getRate?.(kind));
         return [0.5, 1, 2].includes(rate) ? rate : 1;
     }
-}
 
-function lastStepsFromEvents(tickEvents, fallback = {}) {
-    return Object.keys(fallback).reduce((steps, kind) => {
-        const first = tickEvents[kind]?.[0];
-        steps[kind] = first ? first.step : fallback[kind] ?? 0;
-        return steps;
-    }, {});
+    _scheduleLoop() {
+        if (!this.running) return;
+        this._scheduleFutureEvents();
+        this.timer = setTimeout(() => this._scheduleLoop(), this.scheduleIntervalMs);
+    }
+
+    _now() {
+        return this.audioCtx ? this.audioCtx.currentTime : performance.now() / 1000;
+    }
+
+    _scheduleFutureEvents() {
+        const now = this._now();
+        const deadline = now + this.lookaheadSec;
+        const baseStepDur = this._baseStepSec();
+        const allEvents = {};
+
+        Object.keys(this.steps).forEach((kind) => {
+            const dur = this._stepDuration(kind);
+            const loopLen = this.loopLengthFor(kind);
+
+            if (this.nextStepTimes[kind] < now) {
+                const behind = now - this.nextStepTimes[kind];
+                const stepsToCatch = Math.min(Math.floor(behind / dur), loopLen);
+                this.steps[kind] = (this.steps[kind] + stepsToCatch) % loopLen;
+                this.nextStepTimes[kind] += stepsToCatch * dur;
+                if (this.nextStepTimes[kind] < now) {
+                    this.nextStepTimes[kind] = now;
+                }
+            }
+
+            while (this.nextStepTimes[kind] < deadline) {
+                const stepTime = this.nextStepTimes[kind];
+                const step = this.steps[kind];
+
+                let swingOffset = 0;
+                if (step % 2 === 1) {
+                    swingOffset = baseStepDur * this.swing * 0.25;
+                }
+                const adjustedTime = stepTime + swingOffset;
+
+                this.steps[kind] = (step + 1) % loopLen;
+                this.nextStepTimes[kind] += dur;
+                this.lastSteps[kind] = step;
+                this.tickCount += 1;
+
+                if (!allEvents[kind]) allEvents[kind] = [];
+                allEvents[kind].push({ kind, step, time: adjustedTime });
+            }
+        });
+
+        const hasEvents = Object.keys(allEvents).length > 0;
+        if (hasEvents) {
+            try {
+                this.onTick?.(allEvents);
+            } catch (error) {
+                this.onError?.(error, allEvents);
+            }
+        }
+    }
 }

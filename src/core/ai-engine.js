@@ -2,7 +2,8 @@ import { parseIntent, intentToActions } from "./ai-intent.js";
 import { describeSnapshot, describePatternSummary, describeScene, describeGenre } from "./ai-context.js";
 import { GENRE_PROFILES, DRUM_RANDOM_GENRES, SCALE_DEFINITIONS, SCENE_DEFINITIONS, SCENE_TYPES } from "./constants.js";
 import { SceneManager } from "./ai-scene.js";
-import { analyzeCreativeInput, generateCompositionPlan, generateMusicalFeedback, formatCompositionPlanAsText, suggestFollowUp, generateWelcomeMessage } from "./ai-personality.js";
+import { analyzeCreativeInput, generateCompositionPlan, generateMusicalFeedback, formatCompositionPlanAsText, suggestFollowUp, generateWelcomeMessage, SHADER_SYSTEM_PROMPT, getShaderSuggestion, explainShaderStructure } from "./ai-personality.js";
+import { AIEngineOllama } from "./ai-ollama.js";
 
 export class AIEngine {
     constructor(bridge) {
@@ -10,6 +11,7 @@ export class AIEngine {
         this.sceneManager = bridge ? new SceneManager({ bridge }) : null;
         this.history = [];
         this.maxHistory = 50;
+        this.ollama = new AIEngineOllama();
         this._responseCallbacks = [];
         this.context = {
             lastMood: null,
@@ -22,16 +24,32 @@ export class AIEngine {
         };
     }
 
+    connectOllama(model) {
+        return this.ollama.connect(model);
+    }
+
+    disconnectOllama() {
+        this.ollama.disconnect();
+    }
+
+    isOllamaConnected() {
+        return this.ollama.isConnected();
+    }
+
     onResponse(callback) {
         this._responseCallbacks.push(callback);
         return this;
     }
 
-    process(input) {
+    async process(input) {
         this.context.interactionCount++;
         const entry = { input, timestamp: Date.now(), actions: [], response: "" };
 
         try {
+            if (this.ollama.isConnected()) {
+                return await this._handleOllamaChat(input, entry);
+            }
+
             const creativeAnalysis = analyzeCreativeInput(input);
 
             if (creativeAnalysis.isCreative && !this._isDirectCommand(input)) {
@@ -164,6 +182,77 @@ export class AIEngine {
             entry.response = `Error: ${err.message}`;
             this._addHistory(entry);
             this._emitResponse(entry.response, entry);
+        }
+
+        return entry;
+    }
+
+    processShader(input, shaderSource) {
+        const entry = { input, timestamp: Date.now(), response: "", modifiedSource: null, shader: true };
+
+        try {
+            const lower = input.toLowerCase().trim();
+            let response = "";
+            let modifiedSource = null;
+
+            const structure = explainShaderStructure(shaderSource);
+
+            if (lower.includes("help") || lower === "?" || lower === "commands") {
+                response = [
+                    `═ SHADER AI ASSISTANT ║`,
+                    ``,
+                    `Available commands:`,
+                    `  explain       — Describe what this shader does`,
+                    `  add glow      — Add a glow/bloom effect`,
+                    `  add blur      — Add gaussian blur`,
+                    `  edge detect   — Add edge detection / outline`,
+                    `  color shift   — Tips for color manipulation`,
+                    `  distort       — Add distortion/wave/ripple`,
+                    `  help          — Show this message`,
+                    ``,
+                    `Or ask any GLSL-related question.`,
+                ].join("\n");
+            } else if (lower.includes("explain") || lower === "e") {
+                const parts = [
+                    `Shader: ${structure.lineCount} lines`,
+                    `Structure: ${structure.hasMain ? "✓ has main()" : "✗ missing main()"} ${structure.hasGlFragColor ? "✓ has gl_FragColor" : "✗ missing gl_FragColor"}`,
+                    `Categories: ${structure.categories.join(", ") || "none"}`,
+                    `Uniforms: ${structure.uniforms.join(", ") || "none"}`,
+                    `Image inputs: ${structure.imageInputs ? "yes" : "no"}`,
+                    `Status: ${structure.isValid ? "valid" : "incomplete"}`,
+                ].join("\n");
+                response = [
+                    `═ SHADER ANALYSIS ║`,
+                    ``,
+                    parts,
+                    ``,
+                    `Tip: Ask "add glow" or "color shift" for modification ideas.`,
+                ].join("\n");
+            } else {
+                const suggestion = getShaderSuggestion(input);
+                if (suggestion) {
+                    response = [
+                        `═ SHADER SUGGESTION ║`,
+                        ``,
+                        suggestion,
+                    ].join("\n");
+                } else {
+                    response = [
+                        `═ SHADER AI ║`,
+                        ``,
+                        `I can help you modify and understand GLSL shaders.`,
+                        ``,
+                        `Try: "explain", "add glow", "add blur", "edge detect", "color shift", "distort", or "help".`,
+                        ``,
+                        `Future: AI-powered shader generation will be available here.`,
+                    ].join("\n");
+                }
+            }
+
+            entry.response = response;
+            entry.modifiedSource = modifiedSource;
+        } catch (err) {
+            entry.response = `Error: ${err.message}`;
         }
 
         return entry;
@@ -424,6 +513,104 @@ export class AIEngine {
             return basic + "\n\n💡 Try:\n  • " + suggestions.slice(0, 2).join("\n  • ");
         }
         return basic;
+    }
+
+    async _handleOllamaChat(input, entry) {
+        try {
+            const snapshot = this.bridge?.getSnapshot();
+            const result = await this.ollama.chat(input, snapshot);
+            entry.response = result.response;
+
+            const hasCompose = result.actions?.some(a => a.type === "compose");
+            const hasGenerate = result.actions?.some(a => a.type === "generate" || a.type === "generate-drum");
+            const hasGenre = result.actions?.some(a => a.type === "set-drum-genre" || a.type === "compose");
+
+            if (result.actions?.length) {
+                entry.actions = result.actions;
+                const bridgeActions = [];
+                const failedActions = [];
+
+                const knownBridgeTypes = new Set([
+                    "set-bpm", "set-mode", "generate", "switch-bank", "switch-preset",
+                    "switch-all-presets", "set-loop-length", "set-track-rate", "set-scale",
+                    "set-root", "set-drum-genre", "set-sound", "set-mixer", "clear-pattern",
+                    "toggle-play", "toggle-internal-audio", "generate-drum",
+                    "apply-pitch-style", "shift-pitch", "set-drum-voice", "set-selected-note",
+                    "set-drum-pattern", "set-note-pattern", "set-style",
+                ]);
+
+                for (const action of result.actions) {
+                    if (action.type === "compose") {
+                        const genre = action.genre || this._detectGenreFromState();
+                        if (genre && this.sceneManager) {
+                            const compResult = this.sceneManager.compose(genre);
+                            if (!compResult.ok) {
+                                failedActions.push(`compose: ${compResult.error}`);
+                            } else {
+                                this.context.lastGenre = genre;
+                            }
+                        } else {
+                            failedActions.push("compose: scene manager or genre unavailable");
+                        }
+                    } else if (action.type === "compose-custom") {
+                        const genre = action.genre || this._detectGenreFromState();
+                        if (genre && this.sceneManager && Array.isArray(action.scenes)) {
+                            const compResult = this.sceneManager.composeCustom(genre, action.scenes);
+                            if (!compResult.ok) {
+                                failedActions.push(`compose-custom: ${compResult.error}`);
+                            } else {
+                                this.context.lastGenre = genre;
+                            }
+                        } else {
+                            failedActions.push("compose-custom: scenes array required");
+                        }
+                    } else if (action.type === "activate-scene") {
+                        const slot = (action.scene != null ? Number(action.scene) : (action.index != null ? Number(action.index) + 1 : 1)) - 1;
+                        if (this.sceneManager?.activateScene(slot)) {
+                            // worked via scene manager
+                        } else {
+                            bridgeActions.push({ type: "switch-all-presets", slot: Math.max(0, slot) });
+                        }
+                    } else if (knownBridgeTypes.has(action.type)) {
+                        bridgeActions.push(action);
+                    } else {
+                        console.warn("[Ollama] Skipping unknown action type:", action.type);
+                    }
+                }
+
+                if (bridgeActions.length) {
+                    const execResult = this.bridge.executeBatch(bridgeActions);
+                    if (!execResult.ok) {
+                        for (const r of execResult.results) {
+                            if (!r.ok) failedActions.push(`${r.action?.type || "?"}: ${r.error}`);
+                        }
+                    }
+                }
+
+                if (failedActions.length) {
+                    entry.response += "\n\n⚠ " + failedActions.join("; ");
+                }
+            }
+
+            // Safety net: if user asked to create music but LLM didn't generate, auto-compose
+            if (hasGenre && !hasCompose && !hasGenerate) {
+                const genre = this.context.lastGenre || this._detectGenreFromState();
+                if (genre && this.sceneManager) {
+                    const compResult = this.sceneManager.compose(genre);
+                    if (compResult.ok) {
+                        entry.response += "\n\n🎛 Auto-generating " + genre + " patterns...";
+                    }
+                }
+            }
+
+            this._addHistory(entry);
+            this._emitResponse(entry.response, entry);
+            return entry;
+        } catch (err) {
+            this.ollama.disconnect();
+            const fallbackEntry = await this.process(input);
+            return fallbackEntry;
+        }
     }
 
     getHistory() {
