@@ -1,6 +1,7 @@
-import { SCENE_DEFINITIONS, SCENE_TYPES, GENRE_PROFILES, SCALE_DEFINITIONS } from "./constants.js";
+import { SCENE_DEFINITIONS, SCENE_TYPES, GENRE_PROFILES, SCALE_DEFINITIONS, MIDI_NOTE_NAMES } from "./constants.js";
 import { SEQUENCER_MODES, BANK_COUNT, PRESET_COUNT, activePattern as getActivePattern, getLoopLength, DRUM_VOICE_ORDER } from "./pattern-store.js";
 import { noteNameToMidi, midiNoteName } from "./utils.js";
+import { DRUM_GENRE_PATTERNS } from "./randomizer.js";
 
 export class SceneManager {
     constructor({ bridge, randomizer, state } = {}) {
@@ -464,7 +465,8 @@ function closestPower(value, options) {
 }
 
 function clampLoop(value) {
-    return value;
+    const valid = [16, 32, 64, 128, 256];
+    return valid.reduce((best, v) => Math.abs(v - value) < Math.abs(best - value) ? v : best, valid[0]);
 }
 
 function shuffleArray(arr) {

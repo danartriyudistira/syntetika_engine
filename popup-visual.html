@@ -12,8 +12,10 @@
 </head>
 <body>
     <canvas id="visual-canvas-popup"></canvas>
+    <script src="./node_modules/hydra-synth/dist/hydra-synth.js"></script>
     <script type="module">
         import { ShaderEngine } from './src/core/shader-engine.js';
+        import { HydraEngine } from './src/core/hydra-engine.js';
 
         const canvas = document.getElementById('visual-canvas-popup');
         const engine = new ShaderEngine();
@@ -21,6 +23,63 @@
         if (!engine.init(canvas)) {
             document.body.innerHTML = '<p style="color:#ff4444;padding:20px;font-family:monospace;">WebGL not available in this window</p>';
         } else {
+            const hydraEngine = new HydraEngine();
+            const hydraOk = hydraEngine.init(canvas, engine.gl);
+            engine.setEnabled(false);
+
+            function evalHydraInPopup(code, params) {
+                if (!code) return;
+                let fullCode = code;
+                if (params) {
+                    for (const [k, v] of Object.entries(params)) {
+                        const re = new RegExp('\\b' + k + '\\b', 'g');
+                        fullCode = fullCode.replace(re, v);
+                    }
+                }
+                hydraEngine.evaluateCode(fullCode);
+            }
+
+            function applyMode(data) {
+                const mode = data.visualMode || 'isf';
+                if (mode === 'hydra') {
+                    hydraEngine.setEnabled(true);
+                    engine.setEnabled(true);
+                    engine._renderOverride = () => {
+                        if (hydraEngine && hydraEngine.enabled) {
+                            hydraEngine.renderToMain();
+                        }
+                    };
+                    engine._preRender = null;
+                    evalHydraInPopup(data.hydraCode, data.hydraParams);
+                } else if (mode === 'hybrid') {
+                    hydraEngine.setEnabled(true);
+                    engine.setEnabled(true);
+                    engine._renderOverride = null;
+                    engine._preRender = () => {
+                        if (hydraEngine && hydraEngine.enabled) {
+                            const tex = hydraEngine.getTexture();
+                            if (tex) {
+                                engine._customTextures['hydraOutput'] = tex;
+                            }
+                        }
+                    };
+                    if (data.shaderSource) engine.compileShader(data.shaderSource);
+                    if (data.params) {
+                        Object.entries(data.params).forEach(([k, v]) => engine.setParam(k, v));
+                    }
+                } else {
+                    hydraEngine.setEnabled(false);
+                    engine.setEnabled(true);
+                    engine._renderOverride = null;
+                    engine._preRender = null;
+                    if (data.shaderSource) engine.compileShader(data.shaderSource);
+                    if (data.params) {
+                        Object.entries(data.params).forEach(([k, v]) => engine.setParam(k, v));
+                    }
+                }
+                engine.startLoop();
+            }
+
             window.addEventListener('message', (event) => {
                 if (event.source !== window.opener) return;
                 const data = event.data;
@@ -28,13 +87,10 @@
 
                 switch (data.type) {
                     case 'init':
-                        if (data.shaderSource) {
-                            engine.compileShader(data.shaderSource);
-                        }
-                        if (data.params) {
-                            Object.entries(data.params).forEach(([k, v]) => engine.setParam(k, v));
-                        }
-                        engine.startLoop();
+                        engine.stopLoop();
+                        engine._renderOverride = null;
+                        engine._preRender = null;
+                        applyMode(data);
                         break;
                     case 'audio':
                         engine.setAudioData(data);
@@ -58,6 +114,7 @@
 
             window.addEventListener('beforeunload', () => {
                 engine.destroy();
+                hydraEngine.destroy();
                 if (window.opener) {
                     window.opener.postMessage({ type: 'popup-closed' }, '*');
                 }

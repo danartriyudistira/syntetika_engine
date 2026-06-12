@@ -28,6 +28,7 @@ export const ACTIONS = {
     SET_MIXER: "set-mixer",
     CLEAR_PATTERN: "clear-pattern",
     TOGGLE_PLAY: "toggle-play",
+    STOP: "stop",
     TOGGLE_INTERNAL_AUDIO: "toggle-internal-audio",
     GENERATE_DRUM: "generate-drum",
     APPLY_PITCH_STYLE: "apply-pitch-style",
@@ -269,6 +270,7 @@ export class AIBridge {
             [ACTIONS.SET_MIXER]: this._handleSetMixer,
             [ACTIONS.CLEAR_PATTERN]: this._handleClearPattern,
             [ACTIONS.TOGGLE_PLAY]: this._handleTogglePlay,
+            [ACTIONS.STOP]: this._handleStop,
             [ACTIONS.TOGGLE_INTERNAL_AUDIO]: this._handleToggleInternalAudio,
             [ACTIONS.GENERATE_DRUM]: this._handleGenerateDrum,
             [ACTIONS.APPLY_PITCH_STYLE]: this._handleApplyPitchStyle,
@@ -366,9 +368,9 @@ export class AIBridge {
     _handleSetSound(action) {
         const validSounds = {
             drum: ["default", "glitch", "noise", "abstract"],
-            bass: ["hard-bass", "sub", "lead", "pad"],
-            melody: ["vintage", "glass", "lead", "pad"],
-            other: ["bass", "lead", "stab", "fx"],
+            bass: ["default", "sub", "acid", "pluck"],
+            melody: ["default", "bell", "lead", "pad"],
+            other: ["moog", "plucky", "stabby", "fm"],
         };
         const kind = action.mode || this.state.mode;
         const options = validSounds[kind];
@@ -405,6 +407,10 @@ export class AIBridge {
 
     _handleTogglePlay() {
         this._emitAction({ type: "toggle-play" });
+    }
+
+    _handleStop() {
+        this._emitAction({ type: "stop" });
     }
 
     _handleToggleInternalAudio(action) {
@@ -600,19 +606,19 @@ export class AIBridge {
     _emitChange(type, action) {
         const snapshot = this.getSnapshot();
         for (const cb of this._onChangeCallbacks) {
-            try { cb(type, snapshot, action); } catch {}
+            try { cb(type, snapshot, action); } catch (e) { console.warn("AIBridge: onChange callback error", e); }
         }
     }
 
     _emitAction(action) {
         for (const cb of this._onActionCallbacks) {
-            try { cb(action); } catch {}
+            try { cb(action); } catch (e) { console.warn("AIBridge: onAction callback error", e); }
         }
     }
 
     _emitError(action, error) {
         for (const cb of this._onErrorCallbacks) {
-            try { cb(action, error); } catch {}
+            try { cb(action, error); } catch (e) { console.warn("AIBridge: onError callback error", e); }
         }
     }
 }

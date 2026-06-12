@@ -637,7 +637,7 @@ export class AIEngine {
 
     _emitResponse(text, entry) {
         for (const cb of this._responseCallbacks) {
-            try { cb(text, entry); } catch {}
+            try { cb(text, entry); } catch (e) { console.warn("AIEngine: response callback error", e); }
         }
     }
 }

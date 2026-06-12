@@ -1,4 +1,4 @@
-import { GENRE_PROFILES, DRUM_RANDOM_GENRES, SCALE_DEFINITIONS, SCENE_DEFINITIONS, PITCH_GENERATOR_STYLES, MIDI_NOTE_NAMES } from "./constants.js";
+import { GENRE_PROFILES, DRUM_RANDOM_GENRES, SCALE_DEFINITIONS } from "./constants.js";
 
 const MOOD_PROFILES = {
     melancholic: { energy: 0.3, tempoRange: [120, 135], scalePreference: ["minor-aeolian", "dorian", "phrygian"], genreMatch: ["techno", "ambient"], description: "Deep emotion, minor tonality, space for atmosphere" },

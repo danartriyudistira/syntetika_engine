@@ -10,8 +10,9 @@ export class SequencerEngine {
         this.timer = null;
         this.tickCount = 0;
         this.swing = 0;
-        this.lookaheadSec = 0.1;
+        this.lookaheadSec = 0.5;
         this.scheduleIntervalMs = 25;
+        this._rafId = null;
         this.steps = {
             drum: 0, bass: 0, melody: 0, other: 0
         };
@@ -29,6 +30,8 @@ export class SequencerEngine {
 
     start() {
         if (this.running) return;
+        if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
         this.reset();
         this.running = true;
         const now = this._now();
@@ -44,6 +47,10 @@ export class SequencerEngine {
             clearTimeout(this.timer);
             this.timer = null;
         }
+        if (this._rafId) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
+        }
     }
 
     nudge(ms) {
@@ -57,6 +64,7 @@ export class SequencerEngine {
     resync() {
         this.reset();
         if (!this.running) return;
+        if (this._rafId) { cancelAnimationFrame(this._rafId); this._rafId = null; }
         if (this.timer) clearTimeout(this.timer);
         const now = this._now();
         Object.keys(this.nextStepTimes).forEach((k) => {
@@ -105,7 +113,7 @@ export class SequencerEngine {
     _scheduleLoop() {
         if (!this.running) return;
         this._scheduleFutureEvents();
-        this.timer = setTimeout(() => this._scheduleLoop(), this.scheduleIntervalMs);
+        this._rafId = requestAnimationFrame(() => this._scheduleLoop());
     }
 
     _now() {
@@ -122,16 +130,6 @@ export class SequencerEngine {
             const dur = this._stepDuration(kind);
             const loopLen = this.loopLengthFor(kind);
 
-            if (this.nextStepTimes[kind] < now) {
-                const behind = now - this.nextStepTimes[kind];
-                const stepsToCatch = Math.min(Math.floor(behind / dur), loopLen);
-                this.steps[kind] = (this.steps[kind] + stepsToCatch) % loopLen;
-                this.nextStepTimes[kind] += stepsToCatch * dur;
-                if (this.nextStepTimes[kind] < now) {
-                    this.nextStepTimes[kind] = now;
-                }
-            }
-
             while (this.nextStepTimes[kind] < deadline) {
                 const stepTime = this.nextStepTimes[kind];
                 const step = this.steps[kind];
@@ -140,7 +138,8 @@ export class SequencerEngine {
                 if (step % 2 === 1) {
                     swingOffset = baseStepDur * this.swing * 0.25;
                 }
-                const adjustedTime = stepTime + swingOffset;
+                let adjustedTime = stepTime + swingOffset;
+                if (adjustedTime < now) adjustedTime = now;
 
                 this.steps[kind] = (step + 1) % loopLen;
                 this.nextStepTimes[kind] += dur;

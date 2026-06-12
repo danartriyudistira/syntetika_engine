@@ -91,10 +91,6 @@ export function normalizeMidiConfig(saved, defaults = createDefaultMidiConfig())
                 normalized.outNotes = [];
                 normalized.transpose = 0;
             }
-            if (normalized.type === "bass" || normalized.type === "melody" || normalized.type === "other") {
-                normalized.outNotes = [];
-                normalized.transpose = 0;
-            }
             return normalized;
         })
     };

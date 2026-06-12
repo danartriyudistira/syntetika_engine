@@ -8,6 +8,24 @@ const VERTEX_SHADER_SOURCE = `
     }
 `;
 
+const EXTERNAL_VERT = `
+    attribute vec2 a_position;
+    varying vec2 v_uv;
+    void main() {
+        v_uv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+    }
+`;
+
+const EXTERNAL_FRAG = `
+    precision highp float;
+    varying vec2 v_uv;
+    uniform sampler2D u_tex;
+    void main() {
+        gl_FragColor = texture2D(u_tex, v_uv);
+    }
+`;
+
 const ISF_DECL = `uniform float TIME;
 uniform vec2 RENDERSIZE;
 uniform float u_bass;
@@ -96,15 +114,23 @@ export class ShaderEngine {
         this._lastFpsTime = 0;
         this.fps = 0;
         this._enabled = true;
-        this._fpsLimit = 0;
+        this._fpsLimit = 30;
         this._lastFrameTime = 0;
-        this._minFrameInterval = 0;
+        this._minFrameInterval = 30 > 0 ? 1000 / 30 : 0;
         this._onFpsUpdate = null;
         this._customTextures = {};
         this._contextRestoredCallbacks = [];
         this._boundContextLost = (e) => this._handleContextLost(e);
         this._boundContextRestored = () => this._handleContextRestored();
         this._lastSource = null;
+        this._externalProg = null;
+        this._externalVbo = null;
+        this._externalTexture = null;
+        this.renderMode = "isf";
+        this._renderOverride = null;
+        this._preRender = null;
+        this._forcedWidth = 0;
+        this._forcedHeight = 0;
     }
 
     set onFpsUpdate(cb) { this._onFpsUpdate = cb; }
@@ -220,6 +246,7 @@ export class ShaderEngine {
         if (!this.canvas) return;
         this._resizeObserver = new ResizeObserver(() => {
             if (!this.gl || !this.canvas) return;
+            if (this._forcedWidth > 0 && this._forcedHeight > 0) return;
             const w = this.canvas.clientWidth;
             const h = this.canvas.clientHeight;
             if (w > 0 && h > 0 && (this.canvas.width !== w || this.canvas.height !== h)) {
@@ -266,6 +293,9 @@ export class ShaderEngine {
         const gl = this.gl;
         if (!gl) return false;
         this.compileError = null;
+
+        const prevSource = this._lastSource;
+        const prevProgram = this.program;
         this._lastSource = source;
 
         const header = parseISFHeader(source);
@@ -290,6 +320,8 @@ export class ShaderEngine {
             this.compileError = "Vertex: " + gl.getShaderInfoLog(vertexShader);
             gl.deleteShader(vertexShader);
             console.error("ShaderEngine vertex compile error:", this.compileError);
+            this._lastSource = prevSource;
+            this.program = prevProgram;
             return false;
         }
 
@@ -301,6 +333,8 @@ export class ShaderEngine {
             gl.deleteShader(vertexShader);
             gl.deleteShader(fragmentShader);
             console.error("ShaderEngine fragment compile error:", this.compileError);
+            this._lastSource = prevSource;
+            this.program = prevProgram;
             return false;
         }
 
@@ -314,6 +348,8 @@ export class ShaderEngine {
             gl.deleteShader(vertexShader);
             gl.deleteShader(fragmentShader);
             console.error("ShaderEngine link error:", this.compileError);
+            this._lastSource = prevSource;
+            this.program = prevProgram;
             return false;
         }
 
@@ -349,6 +385,14 @@ export class ShaderEngine {
 
     resize() {
         if (!this.gl || !this.canvas) return;
+        if (this._forcedWidth > 0 && this._forcedHeight > 0) {
+            if (this.canvas.width !== this._forcedWidth || this.canvas.height !== this._forcedHeight) {
+                this.canvas.width = this._forcedWidth;
+                this.canvas.height = this._forcedHeight;
+                this.gl.viewport(0, 0, this._forcedWidth, this._forcedHeight);
+            }
+            return;
+        }
         const w = this.canvas.clientWidth;
         const h = this.canvas.clientHeight;
         if (w > 0 && h > 0 && (this.canvas.width !== w || this.canvas.height !== h)) {
@@ -356,6 +400,20 @@ export class ShaderEngine {
             this.canvas.height = h;
             this.gl.viewport(0, 0, w, h);
         }
+    }
+
+    setForcedResolution(w, h) {
+        this._forcedWidth = Math.max(0, Math.round(w));
+        this._forcedHeight = Math.max(0, Math.round(h));
+        if (this.gl && this.canvas) this.resize();
+    }
+
+    _syncExternalTexture() {
+        if (!this._externalTexture || !this._canvas || !this.gl) return;
+        const gl = this.gl;
+        gl.bindTexture(gl.TEXTURE_2D, this._externalTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this._canvas);
+        gl.bindTexture(gl.TEXTURE_2D, null);
     }
 
     render() {
@@ -368,6 +426,14 @@ export class ShaderEngine {
             if (elapsed < this._minFrameInterval) return;
             this._lastFrameTime = now;
         }
+
+        if (this._renderOverride) {
+            this._renderOverride();
+            this.decayTriggers();
+            return;
+        }
+
+        if (this._preRender) this._preRender();
 
         const gl = this.gl;
         if (!gl || !this.program) { this.decayTriggers(); return; }
@@ -469,6 +535,10 @@ export class ShaderEngine {
         }
     }
 
+    setExternalTexture(texture) {
+        this._externalTexture = texture;
+    }
+
     setTexture(name, texture) {
         this._customTextures[name] = texture;
     }
@@ -501,6 +571,51 @@ export class ShaderEngine {
         }
     }
 
+    _ensureExternalRenderer() {
+        const gl = this.gl;
+        if (!gl) return false;
+        if (this._externalProg) return true;
+        const vert = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vert, EXTERNAL_VERT);
+        gl.compileShader(vert);
+        const frag = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(frag, EXTERNAL_FRAG);
+        gl.compileShader(frag);
+        this._externalProg = gl.createProgram();
+        gl.attachShader(this._externalProg, vert);
+        gl.attachShader(this._externalProg, frag);
+        gl.linkProgram(this._externalProg);
+        gl.deleteShader(vert);
+        gl.deleteShader(frag);
+        this._externalVbo = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._externalVbo);
+        gl.bufferData(gl.ARRAY_BUFFER, this.vertices, gl.STATIC_DRAW);
+        return true;
+    }
+
+    renderExternalTexture(texture) {
+        if (!this._enabled || this._contextLost) return;
+        if (!texture) return;
+        const gl = this.gl;
+        if (!gl) return;
+        if (!this._ensureExternalRenderer()) return;
+        this.resize();
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        if (w === 0 || h === 0) return;
+        gl.useProgram(this._externalProg);
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._externalVbo);
+        const posLoc = gl.getAttribLocation(this._externalProg, 'a_position');
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        const texLoc = gl.getUniformLocation(this._externalProg, 'u_tex');
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.uniform1i(texLoc, 0);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+
     destroy() {
         this.stopLoop();
         this.running = false;
@@ -515,6 +630,14 @@ export class ShaderEngine {
             }
             if (this.program) this.gl.deleteProgram(this.program);
             this.program = null;
+            if (this._externalVbo) {
+                this.gl.deleteBuffer(this._externalVbo);
+                this._externalVbo = null;
+            }
+            if (this._externalProg) {
+                this.gl.deleteProgram(this._externalProg);
+                this._externalProg = null;
+            }
             for (const key of Object.keys(this._customTextures)) {
                 this.gl.deleteTexture(this._customTextures[key]);
             }

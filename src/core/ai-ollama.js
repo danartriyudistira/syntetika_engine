@@ -43,7 +43,7 @@ export class AIEngineOllama {
             `Scale: ${snapshot.scale?.root || "C"} ${snapshot.scale?.definition?.label || "Chromatic"}`,
             `Drum Genre: ${snapshot.drumGenre || "default"}`,
             `Mixer: D${snapshot.mixer?.drum || 80}% B${snapshot.mixer?.bass || 80}% M${snapshot.mixer?.melody || 80}% O${snapshot.mixer?.other || 80}%`,
-            `Sounds: drum=${snapshot.sounds?.drum || "default"} bass=${snapshot.sounds?.bass || "hard-bass"} melody=${snapshot.sounds?.melody || "glass"} other=${snapshot.sounds?.other || "stab"}`,
+            `Sounds: drum=${snapshot.sounds?.drum || "default"} bass=${snapshot.sounds?.bass || "default"} melody=${snapshot.sounds?.melody || "default"} other=${snapshot.sounds?.other || "moog"}`,
             `Pattern densities: ${snapshot.patterns ? Object.entries(snapshot.patterns).map(([k, v]) => `${k}=${v ? (v.density * 100).toFixed(0) + "%" : "empty"}`).join(" ") : "unknown"}`,
             `Generator: ${snapshot.generator ? Object.entries(snapshot.generator.modes || {}).map(([k, v]) => `${k}=${v}/${snapshot.generator.roles?.[k] || "bass"}/${snapshot.generator.styles?.[k] || "root-pulse"}`).join(" ") : "unknown"}`,
         ].join("\n") + "\n\nUSER STYLE PREFERENCES:\n" + styleStr : "No state available";
@@ -232,8 +232,6 @@ ${stateStr}`;
             { role: "user", content: userInput }
         ];
 
-        console.log("[Ollama] Sending:", userInput);
-
         const res = await fetch(`${this._baseUrl}/api/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -250,8 +248,6 @@ ${stateStr}`;
         const data = await res.json();
         const content = data.message?.content || "{}";
 
-        console.log("[Ollama] Raw content:", content);
-
         const cleaned = content.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
         let parsed;
         try {
@@ -266,8 +262,6 @@ ${stateStr}`;
 
         const response = typeof parsed.response === "string" ? parsed.response : "";
         const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
-
-        console.log("[Ollama] Parsed response:", response, "actions:", actions.length);
 
         return { response, actions };
     }
@@ -284,7 +278,7 @@ ${stateStr}`;
 
     _notifyStatus(connected) {
         for (const cb of this._onStatusChangeCallbacks) {
-            try { cb(connected); } catch {}
+            try { cb(connected); } catch (e) { console.warn("Ollama: status callback error", e); }
         }
     }
 }

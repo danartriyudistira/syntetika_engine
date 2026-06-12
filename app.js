@@ -18,6 +18,7 @@ import {
 import { Randomizer } from "./src/core/randomizer.js";
 import { SequencerEngine } from "./src/core/sequencer.js";
 import { loadState, normalizeState, saveState as persistState } from "./src/core/state.js";
+import { STORAGE_KEY } from "./src/core/constants.js";
 import {
     ResolumeController,
     normalizeResolumeConfig
@@ -59,16 +60,16 @@ import {
     PITCH_GENERATOR_STYLES,
     PITCH_GENERATOR_STYLE_LABELS,
     SCALE_DEFINITIONS,
-    STORAGE_KEY,
 } from "./src/core/constants.js";
 import { $, $$, pulseButton as flashButton, setEngineState as setEngineStateText } from "./src/core/ui.js";
 import { clamp, generateNoteNames, isNoteName, midiNoteName, noteNameToMidi } from "./src/core/utils.js";
-import { ShaderEngine } from "./src/core/shader-engine.js";
-import { ShaderEditor } from "./src/core/shader-editor.js";
-import { MediaManager } from "./src/core/media-manager.js";
 import { AIBridge } from "./src/core/ai-bridge.js";
 import { AIEngine } from "./src/core/ai-engine.js";
 import { generateWelcomeMessage } from "./src/core/ai-personality.js";
+import { MidiKeyboardOverlay } from "./src/core/midi-keyboard-ui.js";
+import { initVisualEngine, initShaders as initVisualShaders, shaderEngine as visShaderEngine, hydraEngine as visHydraEngine, shaderEditor as visShaderEditor, mediaManager as visMediaManager, setAudioData as visSetAudioData } from "./src/core/visual-engine.js";
+import { initFileProject, saveAppState, exportProjectFile as exportProjectFileModule, openProjectFile as openProjectFileModule, updateProjectNameUI as updateProjectNameUIModule } from "./src/core/file-project.js";
+import { mountAIChat } from "./src/core/ai-controller.js";
 
 (async () => {
     "use strict";
@@ -114,6 +115,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         aspectCustomWidth: $("#aspect-custom-width"),
         aspectCustomHeight: $("#aspect-custom-height"),
         aspectCustomApply: $("#aspect-custom-apply"),
+        canvasResWidth: $("#canvas-res-width"),
+        canvasResHeight: $("#canvas-res-height"),
+        canvasResApply: $("#canvas-res-apply"),
         audioSoundSummaryBtn: $("#audio-sound-summary-btn"),
         audioSoundDetail: $("#audio-sound-detail"),
         audioMixerSummaryBtn: $("#audio-mixer-summary-btn"),
@@ -196,6 +200,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     let resolumePanelOpen = false;
     let shaderEngine = null;
     let shaderEditor = null;
+    let hydraEngine = null;
     let mediaManager = null;
     let aiEngine = null;
     let shaderAudioInterval = null;
@@ -207,12 +212,14 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     let saveStateTimer = null;
     let patternEditGesture = null;
     let _heldNote = { bass: null, melody: null, other: null };
+    const _stepHighlighted = new Set();
     let popupVisualWindow = null;
     let popupVisualActive = false;
     let popupVisualAliveCheck = null;
     let popupVisualReadyTimeout = null;
     let lastSequencerErrorAt = 0;
     let generatorPanelOpen = false;
+    let midiKeyboard = null;
     const SAVE_STATE_DEBOUNCE_MS = 350;
 
     resolume = new ResolumeController(state.resolume, setResolumeStatus);
@@ -240,13 +247,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
              window.clearTimeout(saveStateTimer);
              saveStateTimer = null;
          }
-         // Validate state before saving
-         if (validatePatternMatrixData(state)) {
-             persistProjectState(state);
-         } else {
-             console.error("Failed to save state: Invalid pattern matrix data");
-             setEngineState("Save failed - invalid data");
-         }
+        persistProjectState(state);
      }
 
     function persistProjectState(nextState) {
@@ -299,55 +300,56 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (!freqData) return;
         if (shaderEngine) shaderEngine.setAudioData(freqData);
         if (shaderEditor?.previewEngine) shaderEditor.previewEngine.setAudioData(freqData);
+        if (hydraEngine?.enabled) hydraEngine.setAudioData(freqData);
         if (popupVisualActive) sendToPopupVisual({ type: 'audio', ...freqData });
     }
 
     async function initShaders() {
-        const canvas = els.canvas;
-        if (!canvas) return;
-        shaderEngine = new ShaderEngine();
-        if (!shaderEngine.init(canvas)) {
-            setEngineState("WebGL not available");
+        initVisualEngine({
+            state,
+            els,
+            saveState,
+            bindShaderControls
+        });
+        await initVisualShaders();
+        shaderEngine = visShaderEngine;
+        hydraEngine = visHydraEngine;
+        shaderEditor = visShaderEditor;
+        mediaManager = visMediaManager;
+    }
+
+    function syncPopupState() {
+        if (!popupVisualActive) return;
+        const shader = shaderEditor?.getActiveShader();
+        const hydraEditor = document.getElementById("hydra-code-editor");
+        const hydraCode = hydraEditor?.value || "";
+        const hydraParams = {};
+        for (const p of [{ name: 'p1' }, { name: 'p2' }, { name: 'p3' }, { name: 'p4' }]) {
+            const el = document.querySelector(`[data-hpv="${p.name}"]`);
+            hydraParams[p.name] = el ? parseFloat(el.textContent) : 0.5;
+        }
+        sendToPopupVisual({
+            type: 'init',
+            shaderSource: shader?.source || null,
+            params: shaderEngine ? { ...shaderEngine.params } : {},
+            visualMode: state.visualMode || "isf",
+            hydraCode,
+            hydraParams,
+        });
+    }
+    function sendToPopupVisual(data) {
+        if (!popupVisualActive) return;
+        if (!popupVisualWindow || popupVisualWindow.closed) {
+            closePopupVisual();
             return;
         }
-        shaderEngine.onFpsUpdate = (fps) => {
-            if (els.fpsCounter) els.fpsCounter.textContent = fps + " FPS";
-        };
-        if (!state.visualEnabled) shaderEngine.setEnabled(false);
-
-        mediaManager = new MediaManager(shaderEngine);
-        mediaManager.loadFromStorage();
-
-        shaderEditor = new ShaderEditor({
-            onSwitch: (id) => {
-                const shader = shaderEditor.getShaderById(id);
-                if (shader && shaderEngine) {
-                    shaderEngine.compileShader(shader.source);
-                }
-                state.activeShaderId = id;
-                saveState();
-                bindShaderControls();
-                updateVisualPresetStatus();
-            },
-            onShadersChange: () => {
-                if (els.shaderGalleryHost) shaderEditor.renderGallery(els.shaderGalleryHost);
-            }
-        });
-        await shaderEditor.init();
-        if (els.shaderGalleryHost) shaderEditor.renderGallery(els.shaderGalleryHost);
-        shaderEngine.startLoop();
-        if (shaderAudioInterval) clearInterval(shaderAudioInterval);
-        shaderAudioInterval = setInterval(updateShaderAudio, 50);
-    }
-
-    function sendToPopupVisual(data) {
-        if (popupVisualWindow && popupVisualActive) {
-            try {
-                popupVisualWindow.postMessage(data, '*');
-            } catch {}
+        try {
+            popupVisualWindow.postMessage(data, '*');
+        } catch (e) {
+            console.warn("sendToPopupVisual failed", e);
+            closePopupVisual();
         }
     }
-
     function openPopupVisual() {
         if (popupVisualActive || !shaderEngine || !shaderEditor) return;
         const popup = window.open('popup-visual.html', 'SyntetikaVisual', 'width=960,height=640');
@@ -357,21 +359,18 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         }
         popupVisualWindow = popup;
         popupVisualActive = true;
-
         if (shaderEngine) shaderEngine.setEnabled(false);
         els.body?.classList.add('popup-visual-mode');
         applyStateToUI();
-
         window.addEventListener('message', handlePopupVisualMessage);
-
         popupVisualAliveCheck = setInterval(() => {
-            if (popupVisualWindow && popupVisualWindow.closed) {
+            if (!popupVisualActive) return;
+            if (!popupVisualWindow || popupVisualWindow.closed) {
                 closePopupVisual();
                 return;
             }
             sendToPopupVisual({ type: 'ping' });
         }, 3000);
-
         popupVisualReadyTimeout = setTimeout(() => {
             if (popupVisualActive) {
                 setEngineState('Popup visual did not respond');
@@ -379,7 +378,6 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
         }, 5000);
     }
-
     function handlePopupVisualMessage(event) {
         if (event.source !== popupVisualWindow) return;
         const data = event.data;
@@ -391,19 +389,12 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 clearTimeout(popupVisualReadyTimeout);
                 popupVisualReadyTimeout = null;
             }
-            const shader = shaderEditor?.getActiveShader();
-            sendToPopupVisual({
-                type: 'init',
-                shaderSource: shader?.source || null,
-                params: shaderEngine ? { ...shaderEngine.params } : {}
-            });
+            syncPopupState();
         }
     }
-
     function closePopupVisual() {
         if (!popupVisualActive) return;
         popupVisualActive = false;
-
         if (popupVisualAliveCheck) {
             clearInterval(popupVisualAliveCheck);
             popupVisualAliveCheck = null;
@@ -412,22 +403,21 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             clearTimeout(popupVisualReadyTimeout);
             popupVisualReadyTimeout = null;
         }
-
         if (popupVisualWindow && !popupVisualWindow.closed) {
             try {
                 popupVisualWindow.postMessage({ type: 'close' }, '*');
                 popupVisualWindow.close();
-            } catch {}
+            } catch (e) {
+                console.warn("closePopupVisual: failed to close popup", e);
+            }
         }
         popupVisualWindow = null;
-
         window.removeEventListener('message', handlePopupVisualMessage);
-
         els.body?.classList.remove('popup-visual-mode');
-
         if (shaderEngine && state.visualEnabled) {
             shaderEngine.setEnabled(true);
         }
+        applyVisualMode();
         applyStateToUI();
     }
 
@@ -618,6 +608,12 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                                 clearInterval(paramDecayTimers[inp.name]);
                                 delete paramDecayTimers[inp.name];
                             }
+                            if (hydraEngine?.enabled && (state.visualMode === "hydra" || state.visualMode === "hybrid")) {
+                                const editor = document.getElementById("hydra-code-editor");
+                                if (editor && editor.value.trim()) {
+                                    evaluateHydraWithParams(editor.value.trim());
+                                }
+                            }
                             saveMidi();
                         });
                     });
@@ -641,6 +637,12 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                                         const labels2 = inp.type === 'color' ? ['R','G','B','A'] : ['X','Y'];
                                         valEl.textContent = arr.map((v, k) => `${labels2[k]}:${Number(v).toFixed(2)}`).join(' ');
                                     }
+                                    if (hydraEngine?.enabled && (state.visualMode === "hydra" || state.visualMode === "hybrid")) {
+                                        const editor = document.getElementById("hydra-code-editor");
+                                        if (editor && editor.value.trim()) {
+                                            evaluateHydraWithParams(editor.value.trim());
+                                        }
+                                    }
                                 });
                             }
                         }
@@ -656,6 +658,12 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                             if (paramDecayTimers[inp.name]) {
                                 clearInterval(paramDecayTimers[inp.name]);
                                 delete paramDecayTimers[inp.name];
+                            }
+                            if (hydraEngine?.enabled && (state.visualMode === "hydra" || state.visualMode === "hybrid")) {
+                                const editor = document.getElementById("hydra-code-editor");
+                                if (editor && editor.value.trim()) {
+                                    evaluateHydraWithParams(editor.value.trim());
+                                }
                             }
                         });
                     }
@@ -720,6 +728,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             await initShaders();
             audio = new AudioEngine();
             audio.setMixerLevels(state.mixer);
+            applyVisualMode();
             return;
         }
 
@@ -755,21 +764,109 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         });
         aiBridge.onAction((action) => {
             if (action.type === "toggle-play") togglePlay();
+            if (action.type === "stop") {
+                if (state.playing) togglePlay();
+            }
         });
         window.__aiBridge = aiBridge;
 
         aiEngine = new AIEngine(aiBridge);
         window.__aiEngine = aiEngine;
         if (shaderEditor) shaderEditor.aiEngine = aiEngine;
-        mountAIChat(aiEngine);
+        initFileProject({
+            els,
+            state,
+            sequencer,
+            shaderEditor,
+            shaderEngine,
+            clearHeldNotes,
+            flashFileMenuLabel,
+            setEngineState
+        });
+        mountAIChat(aiEngine, {
+            getState: () => state,
+            randomizer,
+            activePattern,
+            getLoopLength,
+            renderGrid,
+            saveState,
+            currentScaleDefinition,
+            welcomeMessage: generateWelcomeMessage()
+        });
+
+        const handleKbNoteOn = (midi, noteName, velocity, isRecording) => {
+            const kind = state.mode;
+            if (kind === "drum") return;
+            const triggerFn = kind === "bass" ? triggerBass : kind === "melody" ? triggerMelody : triggerOther;
+            triggerFn(noteName, velocity);
+            if (isRecording && sequencer?.isRunning()) {
+                const step = sequencer.currentStep(kind);
+                const pattern = activePattern(kind);
+                if (pattern && pattern[step] !== undefined) {
+                    window.__aiBridge?.saveUndo();
+                    pattern[step] = { active: true, note: noteName, tie: false };
+                    const cell = document.querySelector(`.step[data-edit-kind="${kind}"][data-edit-step="${step}"]`);
+                    if (cell) {
+                        cell.classList.add("bass-active");
+                        cell.classList.remove("tie");
+                        let noteEl = cell.querySelector(".step-note");
+                        if (!noteEl) {
+                            noteEl = document.createElement("span");
+                            noteEl.className = "step-note";
+                            cell.appendChild(noteEl);
+                        }
+                        noteEl.textContent = noteName;
+                    }
+                    saveState();
+                    updateUndoButtons();
+                }
+            }
+        };
+        const handleKbNoteOff = (midi, noteName) => {
+            const kind = state.mode;
+            if (kind === "drum") return;
+            audio.releaseNote(kind);
+            sendMidiNoteOff(kind, noteName);
+        };
+
+        midiKeyboard = new MidiKeyboardOverlay({
+            onNoteOn: (midi, noteName, velocity) => {
+                handleKbNoteOn(midi, noteName, velocity, midiKeyboard?.isRecording());
+            },
+            onNoteOff: (midi, noteName) => {
+                handleKbNoteOff(midi, noteName);
+            },
+            onRecordChange: (recording) => {
+                applyStateToUI();
+            },
+            onOpenChange: (open) => {
+                applyStateToUI();
+            }
+        });
+        const overlayEl = document.getElementById("midi-keyboard-overlay");
+        if (overlayEl) midiKeyboard.mount(overlayEl);
+
         bindEvents();
         applyStateToUI();
+        applyVisualMode();
+        bindHydraParams();
         loadVisualFromPreset(activeSlotFor(state.mode));
         updateVisualPresetStatus();
         renderGrid();
         renderNotePicker();
         renderScalePicker();
         initMIDI();
+        syncHydraUI();
+    }
+
+    function syncHydraUI() {
+        const editor = document.getElementById("hydra-code-editor");
+        if (!editor) return;
+        const slot = activeSlotFor(state.mode);
+        const preset = state.visualPresets[slot];
+        if (preset && preset.hydraCode) {
+            editor.value = preset.hydraCode;
+        }
     }
 
     function mountWorkspaceLayout() {
@@ -839,6 +936,13 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             }
         });
 
+        document.getElementById("midi-kb-toggle")?.addEventListener("click", () => {
+            if (midiKeyboard?.isActive()) {
+                midiKeyboard?.hide();
+            } else {
+                midiKeyboard?.show();
+            }
+        });
         els.mediaLoadBtn?.addEventListener("click", () => {
             els.mediaFileInput?.click();
         });
@@ -894,6 +998,21 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             state.visualAspect = "custom";
             state.visualAspectWidth = w;
             state.visualAspectHeight = h;
+            if (els.aspectMenu) els.aspectMenu.classList.remove("open");
+            applyStateToUI();
+            saveState();
+        });
+
+        els.canvasResApply?.addEventListener("click", () => {
+            const w = parseInt(els.canvasResWidth?.value, 10) || 0;
+            const h = parseInt(els.canvasResHeight?.value, 10) || 0;
+            state.canvasWidth = Math.max(0, w);
+            state.canvasHeight = Math.max(0, h);
+            if (shaderEngine) shaderEngine.setForcedResolution(state.canvasWidth, state.canvasHeight);
+            if (hydraEngine) hydraEngine.setSize(
+                state.canvasWidth > 0 ? state.canvasWidth : (els.canvas?.clientWidth || 1920),
+                state.canvasHeight > 0 ? state.canvasHeight : (els.canvas?.clientHeight || 1080)
+            );
             if (els.aspectMenu) els.aspectMenu.classList.remove("open");
             applyStateToUI();
             saveState();
@@ -1109,6 +1228,475 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             });
         }
 
+        const hydraRunBtn = document.getElementById("hydra-run-btn");
+        hydraRunBtn?.addEventListener("click", () => {
+            runHydraCode();
+        });
+
+        const hydraClearBtn = document.getElementById("hydra-clear-btn");
+        hydraClearBtn?.addEventListener("click", () => {
+            if (hydraEngine) {
+                try { hydraEngine.hydra?.synth?.hush(); } catch (e) { console.warn("Hydra: hush error", e); }
+                hydraEngine.setCode('');
+            }
+            const editor = document.getElementById("hydra-code-editor");
+            if (editor) editor.value = '';
+            const errEl = document.getElementById("hydra-error");
+            if (errEl) errEl.hidden = true;
+        });
+
+        const hydraRandomBtn = document.getElementById("hydra-random-btn");
+        hydraRandomBtn?.addEventListener("click", () => {
+            const code = generateRandomHydraCode();
+            const editor = document.getElementById("hydra-code-editor");
+            if (editor) editor.value = code;
+            if (state.visualMode === "hydra" || state.visualMode === "hybrid") {
+                evaluateHydraWithParams(code);
+            }
+            syncPopupState();
+        });
+
+        const hydraSaveBtn = document.getElementById("hydra-save-btn");
+        hydraSaveBtn?.addEventListener("click", () => {
+            saveVisualToSlot(activeSlotFor(state.mode));
+            saveState();
+            updateVisualPresetStatus();
+            hydraSaveBtn.classList.add("flash");
+            setTimeout(() => hydraSaveBtn.classList.remove("flash"), 300);
+        });
+
+        document.querySelectorAll("[data-visual-tab]").forEach((tab) => {
+            tab.addEventListener("click", () => {
+                document.querySelectorAll("[data-visual-tab]").forEach((t) => t.classList.remove("active"));
+                tab.classList.add("active");
+                const tabName = tab.dataset.visualTab;
+                document.querySelectorAll("[data-visual-tab-content]").forEach((content) => {
+                    content.hidden = content.dataset.visualTabContent !== tabName;
+                });
+                if (tabName === "hydra") {
+                    state.visualMode = "hydra";
+                    applyVisualMode();
+                    saveState();
+                } else if (tabName === "shaders") {
+                    state.visualMode = "isf";
+                    applyVisualMode();
+                    saveState();
+                }
+            });
+        });
+
+        document.querySelectorAll("[data-visual-mode]").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                document.querySelectorAll("[data-visual-mode]").forEach((b) => b.classList.remove("active"));
+                btn.classList.add("active");
+                state.visualMode = btn.dataset.visualMode;
+                applyVisualMode();
+                saveState();
+            });
+        });
+
+        const hydraEditor = document.getElementById("hydra-code-editor");
+        hydraEditor?.addEventListener("keydown", (event) => {
+            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+                event.preventDefault();
+                runHydraCode();
+            }
+        });
+
+    }
+
+    function pick(arr) {
+        return arr[Math.floor(Math.random() * arr.length)]
+    }
+    function rng(min, max, fixed = 2) {
+        return Number((Math.random() * (max - min) + min).toFixed(fixed))
+    }
+
+    function generateRandomHydraCode() {
+        function pRef(i, scale = 1) { return `(p${i} * ${scale})` }
+        function pMix(a, b, i) { return `(${a} + p${i} * (${b} - ${a}))` }
+
+        const sources = [
+            () => `osc(${pMix(3, 50, 1)}, ${pRef(2, 0.5)}, ${pMix(0.1, 1, 3)})`,
+            () => `noise(${pMix(1, 10, 1)}, ${pRef(2, 0.5)})`,
+            () => `voronoi(${pMix(2, 20, 1)}, ${pRef(2, 0.5)}, ${pMix(0.3, 1, 3)})`,
+            () => `shape(${pick([3, 4, 5, 6, 8, 12])}, ${pMix(0.3, 1, 2)}, ${pMix(0.01, 0.3, 4)})`,
+            () => `gradient(${pMix(0.1, 2, 1)})`,
+            () => `solid(${pRef(1, 1)}, ${pRef(2, 1)}, ${pRef(3, 1)}, ${pMix(0.3, 1, 4)})`,
+        ]
+
+        const transforms = [
+            (src) => `${src}.rotate(${pRef(4, 6.28)}, ${pRef(2, 0.5)})`,
+            (src) => `${src}.scale(${pMix(0.5, 3, 1)}, ${pMix(0.5, 3, 2)})`,
+            (src) => `${src}.pixelate(${pMix(5, 50, 1)}, ${pMix(5, 50, 2)})`,
+            (src) => `${src}.kaleid(${'Math.floor(' + pMix(3, 8, 4) + ')'})`,
+            (src) => `${src}.repeat(${pMix(2, 6, 1)}, ${pMix(2, 6, 2)})`,
+            (src) => `${src}.repeatX(${pMix(2, 8, 1)}, ${pRef(2, 0.5)})`,
+            (src) => `${src}.repeatY(${pMix(2, 8, 1)}, ${pRef(2, 0.5)})`,
+            (src) => `${src}.scroll(${pRef(1, 0.5)}, ${pRef(2, 0.5)})`,
+            (src) => `${src}.scrollX(${pRef(1, 0.2)})`,
+            (src) => `${src}.scrollY(${pRef(1, 0.2)})`,
+        ]
+
+        const colorFx = [
+            (src) => `${src}.posterize(${'Math.floor(' + pMix(2, 8, 4) + ')'}, ${pRef(2, 1)})`,
+            (src) => `${src}.shift(${pRef(1, 0.2)}, ${pRef(2, 0.2)}, ${pRef(3, 0.2)})`,
+            (src) => `${src}.invert(${pMix(0.5, 1, 1)})`,
+            (src) => `${src}.contrast(${pMix(0.5, 2, 1)})`,
+            (src) => `${src}.brightness(${pMix(0.5, 2, 1)})`,
+            (src) => `${src}.saturate(${pRef(1, 2)})`,
+            (src) => `${src}.hue(${pRef(4, 6.28)})`,
+            (src) => `${src}.colorama(${pMix(0.2, 1.5, 1)})`,
+            (src) => `${src}.thresh(${pMix(0.1, 0.6, 1)}, ${pMix(0.01, 0.2, 4)})`,
+        ]
+
+        const modSources = [
+            () => `osc(${pMix(3, 30, 1)}, ${pRef(2, 0.3)}, ${pMix(0.1, 0.8, 3)})`,
+            () => `noise(${pMix(1, 8, 1)}, ${pRef(2, 0.3)})`,
+            () => `voronoi(${pMix(3, 15, 1)}, ${pRef(2, 0.3)}, ${pMix(0.3, 0.8, 3)})`,
+            () => `gradient(${pMix(0.1, 1.5, 1)})`,
+            () => `shape(${pick([3, 4, 6])}, ${pMix(0.5, 1, 2)}, ${pMix(0.05, 0.2, 4)})`,
+        ]
+
+        const isMod = Math.random() < 0.45
+        const isColor = Math.random() < 0.6
+        const isTime = Math.random() < 0.15
+        const numTransforms = Math.floor(Math.random() * 3) + 1
+
+        let code = pick(sources)()
+
+        if (isTime && (code.startsWith('osc(') || code.startsWith('noise('))) {
+            code = code.replace(/\(([^,]+),[^)]+\)/, (_, first) => {
+                const parts = code.match(/\(([^)]+)\)/)[1].split(',').map(s => s.trim())
+                if (parts.length >= 1) {
+                    return `(() => ${parts[0]} + Math.sin(time) * ${pMix(5, 20, 4)}), ${parts[1] || 0}`
+                }
+                return first
+            })
+            code = code.replace(/\)$/, '), () => Math.sin(time * 0.5) * 0.5 + 0.5')
+        }
+
+        const usedTransforms = new Set()
+        for (let i = 0; i < numTransforms; i++) {
+            let idx
+            do { idx = Math.floor(Math.random() * transforms.length) } while (usedTransforms.has(idx))
+            usedTransforms.add(idx)
+            code = transforms[idx](code)
+        }
+
+        if (isMod) {
+            const modSrc = pick(modSources)()
+            const modType = pick(['modulate', 'modulateScale', 'modulatePixelate', 'modulateRotate', 'modulateKaleid'])
+            if (modType === 'modulateKaleid') {
+                code = `${code}.${modType}(${modSrc}, ${'Math.floor(' + pMix(3, 8, 4) + ')'})`
+            } else {
+                code = `${code}.${modType}(${modSrc}, ${pRef(1, 1)})`
+            }
+        }
+
+        if (isColor && Math.random() < 0.7) {
+            code = pick(colorFx)(code)
+        }
+
+        code = `${code}.out()`
+
+        if (isTime && !code.includes('time')) {
+            code = code.replace(/\.out\(\)$/, '.out(o0)')
+            code = `speed = ${pMix(0.5, 2, 1)}\n${code}`
+        }
+
+        return code
+    }
+
+    const hydraParamDefs = [
+        { name: 'p1', label: 'P1', min: 0, max: 2, step: 0.01, def: 0.5 },
+        { name: 'p2', label: 'P2', min: 0, max: 2, step: 0.01, def: 0.5 },
+        { name: 'p3', label: 'P3', min: 0, max: 2, step: 0.01, def: 0.5 },
+        { name: 'p4', label: 'P4', min: 0, max: 2, step: 0.01, def: 0.5 },
+    ]
+    const hydraParamValues = {}
+
+    function setHydraParamImmediate(paramName, value) {
+        hydraParamValues[paramName] = value
+        const hpEl = document.querySelector(`[data-hpv="${paramName}"]`)
+        if (hpEl) hpEl.textContent = Number(value).toFixed(2)
+        const slider = document.querySelector(`input[data-hp="${paramName}"]`)
+        if (slider) slider.value = value
+        const ctrl = document.querySelector(`.hydra-dual-ctrl[data-param="${paramName}"]`)
+        const curEl = ctrl?.querySelector(".dual-range-current")
+        if (curEl) {
+            const def = hydraParamDefs.find((d) => d.name === paramName) || { min: 0, max: 2 }
+            const pct = (value - def.min) / (def.max - def.min) * 100
+            curEl.style.left = Math.max(0, Math.min(100, pct)) + "%"
+        }
+        if (hydraEngine?.enabled && (state.visualMode === 'hydra' || state.visualMode === 'hybrid')) {
+            const editor = document.getElementById('hydra-code-editor')
+            if (editor && editor.value.trim()) {
+                evaluateHydraWithParams(editor.value.trim())
+            }
+        }
+    }
+
+    function getHydraParamDef(paramName) {
+        return hydraParamDefs.find((d) => d.name === paramName) || { min: 0, max: 2 }
+    }
+
+    function bindHydraParams() {
+        const container = document.getElementById("hydra-params")
+        if (!container) return
+
+        function rebuild() {
+            container.innerHTML = hydraParamDefs.map((p) => {
+                const val = hydraParamValues[p.name] ?? p.def
+                hydraParamValues[p.name] = val
+                const trigger = midiConfig.shaderTriggers?.find((m) => m.paramName === p.name)
+                const triggerLabel = trigger ? trigger.source : "M"
+
+                if (trigger) {
+                    const rs = trigger.rangeStart ?? p.min
+                    const rm = trigger.rangeMax ?? p.max
+                    const rMin = p.min, rMax = p.max, rSpan = rMax - rMin || 1
+                    const fillL = ((Math.min(rs, rm) - rMin) / rSpan) * 100
+                    const fillR = ((rMax - Math.max(rs, rm)) / rSpan) * 100
+                    const curPct = ((val - rMin) / rSpan) * 100
+                    return `<div class="hydra-param-row" style="position:relative">
+                        <label>${p.label}</label>
+                        <div class="hydra-dual-ctrl dual-range-ctrl" data-param="${p.name}">
+                            <div class="dual-range-track">
+                                <div class="dual-range-fill" style="left:${fillL}%;right:${fillR}%"></div>
+                                <div class="dual-range-current" data-param="${p.name}" style="left:${curPct}%"></div>
+                            </div>
+                            <input type="range" class="dual-range-thumb idle-knob" data-target="rangeStart" min="${rMin}" max="${rMax}" step="${rSpan / 1000}" value="${rs}">
+                            <input type="range" class="dual-range-thumb peak-knob" data-target="rangeMax" min="${rMin}" max="${rMax}" step="${rSpan / 1000}" value="${rm}">
+                        </div>
+                        <span class="hp-val" data-hpv="${p.name}">${Number(val).toFixed(2)}</span>
+                        <button class="mini-btn shader-trigger-btn linked" data-trigger-param="${p.name}" type="button">${triggerLabel}</button>
+                    </div>`
+                }
+
+                return `<div class="hydra-param-row" style="position:relative">
+                    <label>${p.label}</label>
+                    <input type="range" min="${p.min}" max="${p.max}" step="${p.step}" value="${val}" data-hp="${p.name}">
+                    <span class="hp-val" data-hpv="${p.name}">${Number(val).toFixed(2)}</span>
+                    <button class="mini-btn shader-trigger-btn" data-trigger-param="${p.name}" type="button">${triggerLabel}</button>
+                </div>`
+            }).join('')
+
+            container.querySelectorAll('input[data-hp]').forEach((sl) => {
+                sl.addEventListener('input', () => {
+                    const name = sl.dataset.hp
+                    const v = parseFloat(sl.value)
+                    hydraParamValues[name] = v
+                    const valEl = container.querySelector(`[data-hpv="${name}"]`)
+                    if (valEl) valEl.textContent = v.toFixed(2)
+                    if (hydraEngine?.enabled && (state.visualMode === 'hydra' || state.visualMode === 'hybrid')) {
+                        const editor = document.getElementById('hydra-code-editor')
+                        if (editor && editor.value.trim()) {
+                            evaluateHydraWithParams(editor.value.trim())
+                        }
+                    }
+                })
+                sl.addEventListener('change', () => {
+                    const name = sl.dataset.hp
+                    const v = parseFloat(sl.value)
+                    hydraParamValues[name] = v
+                    if (hydraEngine?.enabled && (state.visualMode === 'hydra' || state.visualMode === 'hybrid')) {
+                        const editor = document.getElementById('hydra-code-editor')
+                        if (editor && editor.value.trim()) {
+                            evaluateHydraWithParams(editor.value.trim())
+                        }
+                    }
+                })
+            })
+
+            container.querySelectorAll(".shader-trigger-btn").forEach((btn) => {
+                btn.addEventListener("click", (e) => {
+                    e.stopPropagation()
+                    const existing = container.querySelector(".trigger-popup")
+                    if (existing) existing.remove()
+
+                    const popup = document.createElement("div")
+                    popup.className = "trigger-popup"
+                    btn.after(popup)
+                    renderHydraTriggerPopup(btn.dataset.triggerParam, popup)
+                    document.addEventListener("click", closeHydraTriggerPopup, { once: true })
+                })
+            })
+
+            container.querySelectorAll(".idle-knob, .peak-knob").forEach((knob) => {
+                knob.addEventListener("input", () => {
+                    const ctrl = knob.closest(".hydra-dual-ctrl")
+                    if (!ctrl) return
+                    const paramName = ctrl.dataset.param
+                    const target = knob.dataset.target
+                    let rs = parseFloat(ctrl.querySelector(".idle-knob").value)
+                    let rm = parseFloat(ctrl.querySelector(".peak-knob").value)
+                    const def = getHydraParamDef(paramName)
+                    const rMin = def.min, rMax = def.max
+                    if (rs > rm) {
+                        if (target === "rangeStart") { rm = rs; ctrl.querySelector(".peak-knob").value = rm }
+                        else { rs = rm; ctrl.querySelector(".idle-knob").value = rs }
+                    }
+                    const mapping = midiConfig.shaderTriggers?.find((m) => m.paramName === paramName)
+                    if (mapping) {
+                        mapping.rangeStart = rs
+                        mapping.rangeMax = rm
+                    }
+                    const current = target === "rangeStart" ? rs : rm
+                    hydraParamValues[paramName] = current
+                    const valEl = container.querySelector(`[data-hpv="${paramName}"]`)
+                    if (valEl) valEl.textContent = Number(current).toFixed(2)
+                    const fill = ctrl.querySelector(".dual-range-fill")
+                    const curEl = ctrl.querySelector(".dual-range-current")
+                    const span = (rMax - rMin) || 1
+                    if (fill) {
+                        fill.style.left = ((Math.min(rs, rm) - rMin) / span * 100) + "%"
+                        fill.style.right = ((rMax - Math.max(rs, rm)) / span * 100) + "%"
+                    }
+                    if (curEl) {
+                        const pct = Math.max(0, Math.min(100, ((current - rMin) / span) * 100))
+                        curEl.style.left = pct + "%"
+                    }
+                    if (hydraEngine?.enabled && (state.visualMode === 'hydra' || state.visualMode === 'hybrid')) {
+                        const editor = document.getElementById('hydra-code-editor')
+                        if (editor && editor.value.trim()) {
+                            evaluateHydraWithParams(editor.value.trim())
+                        }
+                    }
+                    saveMidi()
+                })
+            })
+        }
+
+        function closeHydraTriggerPopup(e) {
+            if (e.target.closest(".trigger-popup") || e.target.closest(".shader-trigger-btn")) return
+            const popup = container.querySelector(".trigger-popup")
+            if (popup) popup.remove()
+            document.removeEventListener("click", closeHydraTriggerPopup)
+        }
+
+        rebuild()
+    }
+
+    function renderHydraTriggerPopup(paramName, popupEl) {
+        const TRIGGER_SOURCES = [
+            { id: "", label: "—" },
+            { id: "kick", label: "Kick" },
+            { id: "snare", label: "Snare" },
+            { id: "hat", label: "Hat" },
+            { id: "clap", label: "Clap" },
+            { id: "bass", label: "Bass" },
+            { id: "melody", label: "Melody" },
+            { id: "mono", label: "Mono" },
+        ]
+        const current = midiConfig.shaderTriggers?.find((m) => m.paramName === paramName)
+        popupEl.innerHTML = `
+            <div class="trigger-popup-header">Trigger Source</div>
+            <div class="trigger-popup-list">
+                ${TRIGGER_SOURCES.map((s) => `
+                    <button class="trigger-popup-item${current?.source === s.id ? " active" : ""}" data-source="${s.id}" type="button">${s.label}</button>
+                `).join("")}
+            </div>
+            ${current?.source ? `
+            <div class="trigger-popup-invert">
+                <button class="trigger-popup-item invert-btn${current.reverse ? " active" : ""}" data-invert type="button">↕ Invert</button>
+            </div>` : ""}
+        `
+        popupEl.querySelectorAll(".trigger-popup-item").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const source = btn.dataset.source
+                const def = getHydraParamDef(paramName)
+                if (!midiConfig.shaderTriggers) midiConfig.shaderTriggers = []
+                const existing = midiConfig.shaderTriggers.find((m) => m.paramName === paramName)
+                if (source) {
+                    if (existing) {
+                        existing.source = source
+                    } else {
+                        midiConfig.shaderTriggers.push({ paramName, source, rangeStart: def.min, rangeMax: def.max, reverse: false })
+                    }
+                } else {
+                    if (existing) {
+                        midiConfig.shaderTriggers = midiConfig.shaderTriggers.filter((m) => m.paramName !== paramName)
+                    }
+                }
+                saveMidi()
+                bindHydraParams()
+            })
+        })
+        const invBtn = popupEl.querySelector("[data-invert]")
+        if (invBtn) {
+            invBtn.addEventListener("click", () => {
+                const mapping = midiConfig.shaderTriggers.find((m) => m.paramName === paramName)
+                if (mapping) {
+                    mapping.reverse = !mapping.reverse
+                    invBtn.classList.toggle("active")
+                    saveMidi()
+                }
+            })
+        }
+    }
+
+    function evaluateHydraWithParams(code) {
+        if (!hydraEngine) return;
+        const shaderParams = shaderEngine?.params || {}
+        let fullCode = code
+        for (const [k, v] of Object.entries(hydraParamValues)) {
+            const re = new RegExp('\\b' + k + '\\b', 'g')
+            fullCode = fullCode.replace(re, v)
+        }
+        hydraEngine.evaluateCode(fullCode, shaderParams)
+    }
+
+    function runHydraCode() {
+        const editor = document.getElementById("hydra-code-editor");
+        if (!editor || !hydraEngine) return;
+        const code = editor.value.trim();
+        if (!code) return;
+        const errEl = document.getElementById("hydra-error");
+        if (errEl) errEl.hidden = true;
+        evaluateHydraWithParams(code);
+        syncPopupState();
+    }
+
+    function applyVisualMode() {
+        if (!shaderEngine || !hydraEngine) return;
+        const mode = state.visualMode || "isf";
+        if (mode === "hydra") {
+            shaderEngine.setEnabled(true);
+            hydraEngine.setEnabled(true);
+            shaderEngine._renderOverride = () => {
+                if (hydraEngine && hydraEngine.enabled) {
+                    hydraEngine.renderToMain();
+                }
+            };
+            shaderEngine._preRender = null;
+            bindShaderControls();
+            bindHydraParams();
+            const code = document.getElementById("hydra-code-editor");
+            if (code && code.value.trim()) {
+                evaluateHydraWithParams(code.value);
+            }
+        } else if (mode === "hybrid") {
+            shaderEngine.setEnabled(true);
+            hydraEngine.setEnabled(true);
+            shaderEngine._renderOverride = null;
+            shaderEngine._preRender = () => {
+                if (hydraEngine && hydraEngine.enabled) {
+                    const tex = hydraEngine.getTexture();
+                    if (tex) {
+                        shaderEngine._customTextures['hydraOutput'] = tex;
+                    }
+                }
+            };
+            bindShaderControls();
+            bindHydraParams();
+        } else {
+            shaderEngine.setEnabled(state.visualEnabled !== false);
+            hydraEngine.setEnabled(false);
+            shaderEngine._renderOverride = null;
+            shaderEngine._preRender = null;
+        }
+        syncPopupState();
     }
 
     function bindFileMenu() {
@@ -1191,6 +1779,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (!isMonitor && els.midiModal?.classList.contains("open")) return true;
         if (!isMonitor && els.notePicker?.classList.contains("open")) return true;
         if (!isMonitor && els.scalePopup?.classList.contains("open")) return true;
+        if (!isMonitor && midiKeyboard?.isActive()) return true;
         return false;
     }
 
@@ -1227,6 +1816,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (els.midiModal?.classList.contains("open")) return true;
         if (els.notePicker?.classList.contains("open")) return true;
         if (els.scalePopup?.classList.contains("open")) return true;
+        if (midiKeyboard?.isActive()) return true;
         return false;
     }
 
@@ -1259,17 +1849,17 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
             setEngineState("Audio blocked");
             return;
         }
-        if (!sequencer.isRunning()) {
-            sequencer.start();
-            els.playBtn.textContent = "Stop";
-            els.playBtn.classList.add("playing");
+        if (!sequencer?.isRunning()) {
+            sequencer?.start();
+            if (els.playBtn) els.playBtn.textContent = "Stop";
+            if (els.playBtn) els.playBtn.classList.add("playing");
             setEngineState("Playing");
             if (midiConfig.clockOutput && midiConfig.outputID) {
                 midi?.sendMidiStart(midiConfig.outputID);
                 midi?.startClockStream(midiConfig.outputID, state.bpm);
             }
         } else {
-            sequencer.stop();
+            sequencer?.stop();
             if (midiConfig.clockOutput && midiConfig.outputID) {
                 midi?.sendMidiStop(midiConfig.outputID);
             }
@@ -1285,7 +1875,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
     function setBpm(value) {
         state.bpm = clamp(Math.round(Number(value) || state.bpm), 60, 220);
-        if (sequencer.isRunning() && midiConfig.clockOutput && midiConfig.outputID) {
+        if (sequencer?.isRunning() && midiConfig.clockOutput && midiConfig.outputID) {
             midi?.startClockStream(midiConfig.outputID, state.bpm);
         }
         applyStateToUI();
@@ -1335,7 +1925,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                     renderGrid();
                 }
                 if (drumPage === state.drumPage && drumVoice(lane) === voice) {
-                    $(`#d-s-${lane}-${step % 16}`)?.classList.add("current");
+                    const el = $(`#d-s-${lane}-${step % 16}`);
+                    if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
                 }
                 if (active) {
                     if (internalAudioEnabled("drum")) triggerAudioSafely("drum", () => audio.playDrum(voice, state.drumSound, time));
@@ -1356,7 +1947,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 renderGrid();
             }
             if (bassPage === state.bassPage) {
-                $(`#b-s-${step}`)?.classList.add("current");
+                const el = $(`#b-s-${step}`);
+                if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
             }
             if (bassCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
@@ -1394,7 +1986,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 renderGrid();
             }
             if (melodyPage === state.melodyPage) {
-                $(`#m-s-${step}`)?.classList.add("current");
+                const el = $(`#m-s-${step}`);
+                if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
             }
             if (melodyCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
@@ -1432,7 +2025,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 renderGrid();
             }
             if (otherPage === state.otherPage) {
-                $(`#o-s-${step}`)?.classList.add("current");
+                const el = $(`#o-s-${step}`);
+                if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
             }
             if (otherCell?.active) {
                 const velocity = 0x50 + (step % 16 === 0 ? 0x30 : step % 8 === 0 ? 0x20 : step % 4 === 0 ? 0x10 : 0);
@@ -1476,14 +2070,15 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         const isHat = voice === "hat-close" || voice === "hat-open";
         const isDrum = kind === "drum" && !isHat;
         logoEl.classList.remove("pulse", "pulse-drum", "pulse-hat");
-        void logoEl.offsetWidth;
-        if (isHat) {
-            logoEl.classList.add("pulse-hat");
-        } else if (isDrum) {
-            logoEl.classList.add("pulse-drum");
-        } else {
-            logoEl.classList.add("pulse");
-        }
+        requestAnimationFrame(() => {
+            if (isHat) {
+                logoEl.classList.add("pulse-hat");
+            } else if (isDrum) {
+                logoEl.classList.add("pulse-drum");
+            } else {
+                logoEl.classList.add("pulse");
+            }
+        });
     }
 
     function triggerDrum(track, velocity, time) {
@@ -1998,15 +2593,26 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         saveState();
     }
 
-    function saveVisualToPreset(slot) {
+    function saveVisualToSlot(slot) {
         if (state.visualPresets[slot]?.skipVisual) return;
-        const visual = state.visualPresets[slot] || { shaderId: null, params: {} };
-        if (shaderEditor?.activeId) {
-            visual.shaderId = shaderEditor.activeId;
-        }
-        if (shaderEngine?.params) {
-            visual.params = { ...shaderEngine.params };
-        }
+        const prev = state.visualPresets[slot];
+        const visual = {};
+
+        visual.shaderId = shaderEditor?.activeId || prev?.shaderId || null;
+        visual.shaderName = shaderEditor?.getActiveShader()?.name
+            || shaderEditor?.getActiveShader()?.label
+            || shaderEditor?.getActiveShader()?.id
+            || prev?.shaderName || null;
+        visual.shaderSource = shaderEditor?.getActiveShader()?.source
+            || prev?.shaderSource || null;
+        visual.params = shaderEngine?.params
+            ? { ...shaderEngine.params }
+            : (prev?.params ? { ...prev.params } : {});
+
+        const editor = document.getElementById("hydra-code-editor");
+        visual.hydraCode = editor?.value || prev?.hydraCode || "";
+        visual.hydraParams = { ...hydraParamValues };
+
         delete visual.skipVisual;
         state.visualPresets[slot] = visual;
     }
@@ -2014,30 +2620,61 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     function loadVisualFromPreset(slot) {
         const visual = state.visualPresets[slot];
         if (!visual) return;
-        if (visual.skipVisual || !visual.shaderId) return;
-        const shader = shaderEditor?.getShaderById(visual.shaderId);
-        if (!shader) return;
-        shaderEditor.setActive(visual.shaderId);
-        if (shaderEngine && visual.params) {
-            for (const [name, value] of Object.entries(visual.params)) {
-                shaderEngine.setParam(name, value);
+
+        if (!visual.skipVisual) {
+            let shader = visual.shaderId ? shaderEditor?.getShaderById(visual.shaderId) : null;
+            if (!shader && visual.shaderSource && shaderEditor) {
+                const sid = visual.shaderId || "__preset_" + slot;
+                const sname = visual.shaderName || "Preset " + (slot + 1);
+                shaderEditor.shaders.push({ id: sid, name: sname, source: visual.shaderSource });
+                shader = shaderEditor.getShaderById(sid);
+                shaderEditor.saveToStorage();
+            }
+            if (shader && shaderEditor) {
+                shaderEditor.setActive(shader.id);
+            }
+            if (shaderEngine && visual.params) {
+                for (const [name, value] of Object.entries(visual.params)) {
+                    shaderEngine.setParam(name, value);
+                }
+            }
+            bindShaderControls();
+        }
+
+        if (visual.hydraCode) {
+            const editor = document.getElementById("hydra-code-editor");
+            if (editor) editor.value = visual.hydraCode;
+        }
+        if (visual.hydraParams) {
+            for (const [k, v] of Object.entries(visual.hydraParams)) {
+                setHydraParamImmediate(k, v);
             }
         }
-        bindShaderControls();
+        if ((state.visualMode === "hydra" || state.visualMode === "hybrid") && visual.hydraCode) {
+            evaluateHydraWithParams(visual.hydraCode);
+        }
     }
 
     function updateVisualPresetStatus() {
-        const el = $("#visual-preset-status");
+        const el = $("#visual-preset-toolbar");
         if (!el) return;
         const slot = activeSlotFor();
         const shader = shaderEditor?.getActiveShader();
         const shaderName = shader?.label || shader?.name || shader?.id || "—";
         const visual = state.visualPresets[slot];
         const isLinked = !visual?.skipVisual;
+        const hasShader = visual?.shaderSource || (visual?.shaderId && shaderEditor?.getShaderById(visual.shaderId));
+        const hasHydra = visual?.hydraCode && visual.hydraCode.trim().length > 0;
+        const modeLabels = { hydra: "H", hybrid: "H+", isf: "S" };
+        const modeLabel = modeLabels[state.visualMode] || "—";
+        const savedLabel = visual ? "Saved" : "Empty";
         el.innerHTML = `
             <span class="visual-preset-badge">P${slot + 1}</span>
-            <span class="visual-shader-badge">${shaderName}</span>
-            <button class="mini-btn visual-assign-btn" data-visual-assign type="button">Assign</button>
+            <span class="visual-shader-badge" style="${hasShader ? "" : "opacity:0.3"}">${hasShader ? shaderName : "—"}</span>
+            <span class="visual-preset-hydra" style="${hasHydra ? "" : "opacity:0.3"}">H:${hasHydra ? "✓" : "—"}</span>
+            <span class="visual-preset-mode">${modeLabel}</span>
+            <span class="visual-preset-saved">${savedLabel}</span>
+            <button class="mini-btn visual-save-btn" data-visual-save type="button">Save Slot</button>
             <button class="mini-btn visual-link-btn${isLinked ? " linked" : ""}" data-visual-link type="button">${isLinked ? "Link: On" : "Link: Off"}</button>
         `;
         const linkBtn = el.querySelector("[data-visual-link]");
@@ -2054,13 +2691,14 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 updateVisualPresetStatus();
             });
         }
-        const assignBtn = el.querySelector("[data-visual-assign]");
-        if (assignBtn) {
-            assignBtn.addEventListener("click", () => {
-                saveVisualToPreset(activeSlotFor());
+        const saveBtn = el.querySelector("[data-visual-save]");
+        if (saveBtn) {
+            saveBtn.addEventListener("click", () => {
+                saveVisualToSlot(activeSlotFor());
                 saveState();
-                assignBtn.classList.add("flash");
-                setTimeout(() => assignBtn.classList.remove("flash"), 300);
+                saveBtn.classList.add("flash");
+                setTimeout(() => saveBtn.classList.remove("flash"), 300);
+                updateVisualPresetStatus();
             });
         }
     }
@@ -2296,16 +2934,6 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
          if (action === "help") showFileHelp();
      }
 
-      function updateProjectNameUI() {
-          const el = document.getElementById("project-name");
-          if (!el) return;
-          const name = state.projectName || "Untitled";
-          el.textContent = name.length > 10 ? name.slice(0, 10) + ".." : name;
-          document.title = state.projectName
-              ? `${state.projectName} - Syntetika Engine`
-              : "Syntetika Engine - Offline Console";
-      }
-
       function newProject() {
           const confirmed = window.confirm("Buat project baru kosong? Pattern saat ini akan diganti dengan preset kosong.");
           if (!confirmed) return;
@@ -2331,100 +2959,15 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
      }
 
      function exportProjectFile() {
-         flushSaveState();
-         if (!validatePatternMatrixData(state)) {
-             window.alert("Project tidak bisa diexport karena data pattern belum valid. Coba Save lagi atau reload aplikasi.");
-             return;
-         }
-          const normalized = normalizeState(state);
-          const project = {
-              app: "Syntetika Engine",
-              version: 2,
-              exportedAt: new Date().toISOString(),
-              projectName: normalized.projectName,
-              state: normalized,
-              midiConfig
-          };
-         const blob = new Blob([JSON.stringify(project)], { type: "application/json" });
-         const url = URL.createObjectURL(blob);
-         const anchor = document.createElement("a");
-         anchor.href = url;
-         anchor.download = `syntetika-engine-project-${project.exportedAt.slice(0, 10)}.json`;
-         document.body.append(anchor);
-         anchor.click();
-         anchor.remove();
-         URL.revokeObjectURL(url);
-         flashFileMenuLabel("Exported");
-         setEngineState("Project exported");
+         saveAppState(state);
+         exportProjectFileModule();
      }
 
      function openProjectFile() {
           const file = els.projectOpenInput?.files?.[0];
           if (!file) return;
-
-          if (file.size > 50 * 1024 * 1024) {
-              setEngineState("File too large");
-              window.alert("Ukuran file terlalu besar. Maksimal 50MB.");
-              els.projectOpenInput.value = "";
-              return;
-          }
-
-          const reader = new FileReader();
-
-          reader.addEventListener("error", () => {
-              console.error("FileReader error:", reader.error);
-              setEngineState("Open failed - file read error");
-              window.alert("Gagal membaca file: " + (reader.error?.message || "unknown error"));
-              els.projectOpenInput.value = "";
-          });
-
-          reader.addEventListener("load", () => {
-              try {
-                  const text = reader.result;
-                  if (!text || typeof text !== "string" || text.trim().length === 0) {
-                      throw new Error("File kosong atau format tidak dikenal");
-                  }
-
-                  const project = JSON.parse(text);
-
-                  if (!project || typeof project !== "object" || Array.isArray(project)) {
-                      throw new Error("Invalid project file structure");
-                  }
-
-                  const nextState = project.state || project;
-
-                  if (!nextState || typeof nextState !== "object" || Array.isArray(nextState)) {
-                      throw new Error("Invalid project state");
-                  }
-
-                   if (!nextState.memory || typeof nextState.memory !== "object") {
-                       throw new Error("State missing pattern matrix data");
-                   }
-
-                   const projectName = project?.projectName
-                       || file.name.replace(/\.json$/i, "").slice(0, 20);
-
-                   const normalizedState = normalizeState({ ...nextState, projectName });
-
-                   if (!validatePatternMatrixData(normalizedState)) {
-                       throw new Error("Invalid pattern matrix data - possible data corruption");
-                   }
-
-                   state = normalizedState;
-                   localStorage.setItem(STORAGE_KEY, JSON.stringify(normalizedState));
-                   if (project?.midiConfig) saveMidiConfig(project.midiConfig);
-                   setEngineState("Project opened");
-                   window.location.reload();
-              } catch (error) {
-                  console.error("Error loading project:", error);
-                  setEngineState("Open failed");
-                  window.alert(`Gagal memuat file project: ${error.message}`);
-              } finally {
-                  els.projectOpenInput.value = "";
-              }
-          });
-
-          reader.readAsText(file);
+          openProjectFileModule(file);
+          els.projectOpenInput.value = "";
      }
 
     function showFileHelp() {
@@ -2942,7 +3485,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function applyStateToUI() {
-        updateProjectNameUI();
+        updateProjectNameUIModule();
         els.body?.classList.toggle("ui-edit", state.uiMode === "edit");
         els.body?.classList.toggle("ui-performance", state.uiMode === "performance");
         els.body?.classList.toggle("left-panel-collapsed", leftPanelCollapsed);
@@ -2954,9 +3497,12 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         }
         const logoEl = document.getElementById("syntetika-logo");
         if (logoEl) {
-            const showLogo = !state.visualEnabled || popupVisualActive;
+            const showLogo = (!state.visualEnabled && state.visualMode !== "hydra") || popupVisualActive;
             logoEl.classList.toggle("visible", showLogo);
         }
+        document.querySelectorAll("[data-visual-mode]").forEach((btn) => {
+            btn.classList.toggle("active", btn.dataset.visualMode === state.visualMode);
+        });
         if (els.fpsCounter && shaderEngine) {
             els.fpsCounter.textContent = shaderEngine.fps > 0 ? shaderEngine.fps + " FPS" : "-- FPS";
         }
@@ -2983,6 +3529,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
                 aspectToggle.textContent = labels[aspect] || "Aspect: Fill";
             }
         }
+        if (els.canvasResWidth) els.canvasResWidth.value = state.canvasWidth || 0;
+        if (els.canvasResHeight) els.canvasResHeight.value = state.canvasHeight || 0;
         if (els.leftPanelToggle) {
             els.leftPanelToggle.textContent = leftPanelCollapsed ? "Menu" : "Hide";
             els.leftPanelToggle.setAttribute("aria-expanded", leftPanelCollapsed ? "false" : "true");
@@ -3103,6 +3651,9 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         });
         updateUndoButtons();
         updateTieToggleUI();
+        const kbToggle = document.getElementById("midi-kb-toggle");
+        if (kbToggle) kbToggle.classList.toggle("active", midiKeyboard?.isActive());
+        if (els.presetBtns) els.presetBtns.hidden = midiKeyboard?.isActive() ?? false;
     }
 
     function renderPitchGeneratorControls() {
@@ -3230,7 +3781,8 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function clearCurrentSteps() {
-        $$(".step.current").forEach((step) => step.classList.remove("current"));
+        _stepHighlighted.forEach((el) => el.classList.remove("current"));
+        _stepHighlighted.clear();
     }
 
     function markCurrentSteps() {
@@ -3243,17 +3795,21 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
         if (Math.floor(currentDrumStep / 16) === state.drumPage) {
             for (let lane = 0; lane < DRUM_LANE_VOICE_OPTIONS.length; lane += 1) {
-                $(`#d-s-${lane}-${currentDrumStep % 16}`)?.classList.add("current");
+                const el = $(`#d-s-${lane}-${currentDrumStep % 16}`);
+                if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
             }
         }
         if (Math.floor(currentBassStep / 64) === state.bassPage) {
-            $(`#b-s-${currentBassStep}`)?.classList.add("current");
+            const el = $(`#b-s-${currentBassStep}`);
+            if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
         }
         if (Math.floor(currentMelodyStep / 64) === state.melodyPage) {
-            $(`#m-s-${currentMelodyStep}`)?.classList.add("current");
+            const el = $(`#m-s-${currentMelodyStep}`);
+            if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
         }
         if (Math.floor(currentOtherStep / 64) === state.otherPage) {
-            $(`#o-s-${currentOtherStep}`)?.classList.add("current");
+            const el = $(`#o-s-${currentOtherStep}`);
+            if (el) { el.classList.add("current"); _stepHighlighted.add(el); }
         }
     }
 
@@ -3301,7 +3857,28 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         if (midi?.pruneMissingDevices(midiConfig)) saveMidi();
     }
 
-    const paramDecayTimers = {};
+    const _activeDecays = new Map();
+    let _decayRafId = null;
+
+    function _startDecayLoop() {
+        if (_decayRafId) return;
+        function tick() {
+            const now = performance.now();
+            _activeDecays.forEach((decay, paramName) => {
+                const elapsed = now - decay.startTime;
+                const t = Math.min(elapsed / decay.duration, 1);
+                const current = decay.fromVal + (decay.toVal - decay.fromVal) * t;
+                decay.apply(paramName, current);
+                if (t >= 1) _activeDecays.delete(paramName);
+            });
+            if (_activeDecays.size > 0) {
+                _decayRafId = requestAnimationFrame(tick);
+            } else {
+                _decayRafId = null;
+            }
+        }
+        _decayRafId = requestAnimationFrame(tick);
+    }
 
     function getParamDef(paramName) {
         const defs = shaderEngine?.getInputDefs?.() ?? [];
@@ -3332,31 +3909,46 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function decayParam(paramName, fromVal, toVal, duration = 200) {
-        if (paramDecayTimers[paramName]) {
-            clearInterval(paramDecayTimers[paramName]);
-        }
+        _activeDecays.delete(paramName);
         setShaderParamImmediate(paramName, fromVal);
-        const startTime = performance.now();
-        paramDecayTimers[paramName] = setInterval(() => {
-            const elapsed = performance.now() - startTime;
-            const t = Math.min(elapsed / duration, 1);
-            const current = fromVal + (toVal - fromVal) * t;
-            setShaderParamImmediate(paramName, current);
-            if (t >= 1) {
-                clearInterval(paramDecayTimers[paramName]);
-                delete paramDecayTimers[paramName];
-            }
-        }, 16);
+        _activeDecays.set(paramName, {
+            startTime: performance.now(),
+            fromVal,
+            toVal,
+            duration,
+            apply: (name, val) => setShaderParamImmediate(name, val),
+        });
+        _startDecayLoop();
+    }
+
+    function decayHydraParam(paramName, fromVal, toVal, duration = 200, reverse = false) {
+        _activeDecays.delete(paramName);
+        const actualFrom = reverse ? toVal : fromVal;
+        const actualTo = reverse ? fromVal : toVal;
+        setHydraParamImmediate(paramName, actualFrom);
+        _activeDecays.set(paramName, {
+            startTime: performance.now(),
+            fromVal: actualFrom,
+            toVal: actualTo,
+            duration,
+            apply: (name, val) => setHydraParamImmediate(name, val),
+        });
+        _startDecayLoop();
     }
 
     function handleMidiTrigger(paramName) {
-        if (!shaderEngine) return;
         const mapping = midiConfig.shaderTriggers?.find((m) => m.paramName === paramName);
         if (!mapping) return;
-        if (mapping.reverse) {
-            decayParam(paramName, mapping.rangeStart, mapping.rangeMax, 200);
+        const isHydraParam = hydraParamDefs.some((d) => d.name === paramName);
+        if (isHydraParam) {
+            decayHydraParam(paramName, mapping.rangeMax, mapping.rangeStart, 200, mapping.reverse);
         } else {
-            decayParam(paramName, mapping.rangeMax, mapping.rangeStart, 200);
+            if (!shaderEngine) return;
+            if (mapping.reverse) {
+                decayParam(paramName, mapping.rangeStart, mapping.rangeMax, 200);
+            } else {
+                decayParam(paramName, mapping.rangeMax, mapping.rangeStart, 200);
+            }
         }
     }
 
@@ -3405,7 +3997,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
         // MIDI Start
         if (status === 0xFA) {
-            if (midiConfig.syncSource === "midi-clock" && !sequencer.isRunning()) {
+            if (midiConfig.syncSource === "midi-clock" && !sequencer?.isRunning()) {
                 togglePlay();
             }
             if (midiConfig.midiThrough && midiConfig.outputID) {
@@ -3416,7 +4008,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
         // MIDI Stop
         if (status === 0xFC) {
-            if (midiConfig.syncSource === "midi-clock" && sequencer.isRunning()) {
+            if (midiConfig.syncSource === "midi-clock" && sequencer?.isRunning()) {
                 togglePlay();
             }
             if (midiConfig.midiThrough && midiConfig.outputID) {
@@ -3427,7 +4019,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
 
         // MIDI Continue
         if (status === 0xFB) {
-            if (midiConfig.syncSource === "midi-clock" && !sequencer.isRunning()) {
+            if (midiConfig.syncSource === "midi-clock" && !sequencer?.isRunning()) {
                 togglePlay();
             }
             if (midiConfig.midiThrough && midiConfig.outputID) {
@@ -3534,7 +4126,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function sendBassMidi(noteName, velocity, time) {
-        const routing = getMidiTrack("bassline");
+        const routing = getMidiTrack("bass");
         if (!midi?.isReady() || !midiConfig.outputID) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
         const vel = velocity ?? 0x65;
@@ -3573,7 +4165,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function sendMidiNoteOn(kind, noteName, velocity, time) {
-        const trackKey = { bass: "bassline", melody: "melody", other: "other" }[kind];
+        const trackKey = { bass: "bass", melody: "melody", other: "other" }[kind];
         const routing = getMidiTrack(trackKey);
         if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
@@ -3587,7 +4179,7 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
     }
 
     function sendMidiNoteOff(kind, noteName, time) {
-        const trackKey = { bass: "bassline", melody: "melody", other: "other" }[kind];
+        const trackKey = { bass: "bass", melody: "melody", other: "other" }[kind];
         const routing = getMidiTrack(trackKey);
         if (!midi?.isReady() || !midiConfig.outputID || !routing) return;
         const note = clamp(noteNameToMidi(noteName) + routing.transpose, 0, 127);
@@ -3718,226 +4310,6 @@ import { generateWelcomeMessage } from "./src/core/ai-personality.js";
         return midiConfig.tracks.find((track) => track.id === id);
     }
 
-    function mountAIChat(engine) {
-        const existing = document.getElementById("ai-chat-panel");
-        if (existing) existing.remove();
-
-        const container = document.createElement("div");
-        container.id = "ai-chat-panel";
-        container.className = "ai-chat-panel";
-        container.innerHTML = `
-            <div class="ai-chat-header">
-                <span class="ai-chat-title">SYNTHeTIKA</span>
-                <span class="ai-chat-subtitle">AI Music Producer</span>
-                <span class="ai-chat-ollama-status" id="ai-chat-ollama-status" title="Ollama connection">○</span>
-                <button class="ai-chat-ollama-btn" id="ai-chat-ollama-btn" type="button" title="Connect to local Ollama">Ollama</button>
-                <button class="ai-chat-clear" id="ai-chat-clear" type="button" title="Clear chat">🗑</button>
-            </div>
-            <div class="ai-chat-messages" id="ai-chat-messages"></div>
-            <div class="ai-chat-input-row">
-                <textarea class="ai-chat-input" id="ai-chat-input" rows="1" placeholder="Describe your vision... mood? genre? idea?"></textarea>
-                <button class="ai-chat-gen" id="ai-chat-gen" type="button" title="Generate full composition">🎛</button>
-                <button class="ai-chat-send" id="ai-chat-send" type="button" title="Send">↵</button>
-            </div>
-        `;
-
-        const toggle = document.createElement("button");
-        toggle.id = "ai-chat-toggle";
-        toggle.className = "ai-chat-toggle";
-        toggle.textContent = "AI";
-        toggle.title = "Toggle AI Music Producer";
-        toggle.setAttribute("aria-label", "Toggle AI Music Producer");
-
-        document.body.append(toggle, container);
-
-        const messages = container.querySelector("#ai-chat-messages");
-        const input = container.querySelector("#ai-chat-input");
-        const sendBtn = container.querySelector("#ai-chat-send");
-        const clearBtn = container.querySelector("#ai-chat-clear");
-        const genBtn = container.querySelector("#ai-chat-gen");
-        const ollamaBtn = container.querySelector("#ai-chat-ollama-btn");
-        const ollamaStatus = container.querySelector("#ai-chat-ollama-status");
-
-        let open = false;
-
-        function toggleOpen() {
-            open = !open;
-            container.classList.toggle("open", open);
-            toggle.classList.toggle("active", open);
-            if (open) input.focus();
-        }
-
-        toggle.addEventListener("click", toggleOpen);
-
-        function updateOllamaStatus(connected) {
-            ollamaStatus.textContent = connected ? "●" : "○";
-            ollamaStatus.style.color = connected ? "#4f4" : "#888";
-            ollamaBtn.textContent = connected ? "Disconnect" : "Ollama";
-            ollamaBtn.title = connected ? "Disconnect from Ollama" : "Connect to local Ollama";
-        }
-
-        ollamaBtn.addEventListener("click", async () => {
-            if (engine?.isOllamaConnected()) {
-                engine.disconnectOllama();
-                updateOllamaStatus(false);
-                return;
-            }
-            ollamaBtn.textContent = "Connecting...";
-            const ok = await engine?.connectOllama();
-            updateOllamaStatus(ok);
-            if (ok) {
-                addMessage("🔗 Connected to Ollama. Ask me anything about music!");
-            } else {
-                addMessage("❌ Could not connect to Ollama. Make sure it's running on localhost:11434");
-            }
-        });
-
-        function addMessage(text, isUser = false) {
-            hideThinking();
-            const msg = document.createElement("div");
-            msg.className = `ai-chat-msg ${isUser ? "user" : "assistant"}`;
-            const pre = document.createElement("pre");
-            pre.textContent = text;
-            msg.appendChild(pre);
-            messages.appendChild(msg);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        function showThinking() {
-            hideThinking();
-            const msg = document.createElement("div");
-            msg.className = "ai-chat-msg assistant thinking";
-            msg.id = "ai-thinking-msg";
-            const pre = document.createElement("pre");
-            pre.textContent = "...";
-            msg.appendChild(pre);
-            messages.appendChild(msg);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        function hideThinking() {
-            const el = document.getElementById("ai-thinking-msg");
-            if (el) el.remove();
-        }
-
-        function sendMessage() {
-            const text = input.value.trim();
-            if (!text) return;
-            addMessage(text, true);
-            input.value = "";
-            input.style.height = "auto";
-            showThinking();
-
-            if (engine) {
-                engine.process(text).catch(err => {
-                    hideThinking();
-                    addMessage(`Error: ${err.message}`);
-                });
-            } else {
-                addMessage("AI engine not ready.");
-            }
-        }
-
-        function generateAllTracks() {
-            const genre = state.drumRandomGenre || "default";
-            addMessage(`🎛 Generate all tracks`, true);
-
-            try {
-                const scaleDef = currentScaleDefinition();
-                const root = state.noteRoot;
-
-                // Generate all 4 tracks into current bank/slot
-                for (const kind of ["drum", "bass", "melody", "other"]) {
-                    const pattern = activePattern(kind);
-                    if (!pattern) continue;
-
-                    if (kind === "drum") {
-                        randomizer.apply({
-                            mode: "drum",
-                            role: "generate",
-                            pattern,
-                            loopLength: getLoopLength("drum"),
-                            drumGenre: genre,
-                        });
-                    } else {
-                        const role = kind === "other" ? "mono" : kind;
-                        const style = state.pitchGeneratorStyles?.[kind] || (kind === "other" ? "stab" : "root-pulse");
-                        randomizer.apply({
-                            mode: kind,
-                            role: "generate",
-                            pattern,
-                            loopLength: getLoopLength(kind),
-                            scale: scaleDef,
-                            root,
-                            drumGenre: genre,
-                            genre,
-                            generatorMode: "structured",
-                            generatorRole: role,
-                            generatorStyle: style,
-                        });
-                    }
-                }
-
-                renderGrid();
-                saveState();
-                addMessage(`✅ All tracks generated. Press play ▶`);
-            } catch (err) {
-                addMessage(`❌ Error: ${err.message}`);
-            }
-        }
-
-        const _nonGeneratingTypes = new Set([
-            "query", "transport", "undo", "redo",
-            "bank", "preset", "preset-all", "mode",
-            "mixer", "mixer-delta", "bpm", "bpm-delta",
-            "scale", "root", "scale-root", "clear"
-        ]);
-
-        engine?.onResponse((response, entry) => {
-            addMessage(response, false);
-
-            // Auto-generate when user gives musical input via chat
-            if (entry?.intent && !_nonGeneratingTypes.has(entry.intent.type)) {
-                const intent = entry.intent;
-                let detectedGenre = null;
-
-                if (intent.type === "genre") {
-                    detectedGenre = intent.genre;
-                } else if (intent.type === "compose") {
-                    detectedGenre = intent.genre || entry.genre;
-                } else if (intent.type === "creative-direction" && intent.analysis?.genre) {
-                    detectedGenre = intent.analysis.genre;
-                }
-
-                if (detectedGenre) {
-                    state.drumRandomGenre = detectedGenre;
-                }
-                generateAllTracks();
-            }
-        });
-
-        sendBtn.addEventListener("click", sendMessage);
-        genBtn.addEventListener("click", generateAllTracks);
-        input.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                sendMessage();
-            }
-            input.style.height = "auto";
-            input.style.height = Math.min(input.scrollHeight, 120) + "px";
-        });
-        input.addEventListener("input", () => {
-            input.style.height = "auto";
-            input.style.height = Math.min(input.scrollHeight, 120) + "px";
-        });
-
-        clearBtn.addEventListener("click", () => {
-            messages.innerHTML = "";
-            engine?.clearHistory();
-        });
-
-        addMessage(generateWelcomeMessage());
-    }
 
     function performUndo() {
         if (!window.__aiBridge?.undo()) return;

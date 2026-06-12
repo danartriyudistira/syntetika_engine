@@ -23,7 +23,8 @@ import {
     createSelectorMap,
     normalizeBooleanMap,
     normalizeMemory,
-    normalizeSelectorMap
+    normalizeSelectorMap,
+    resolveLegacySoundStyle
 } from "./pattern-store.js";
 import { createResolumeConfigDefaults, normalizeResolumeConfig } from "./resolume.js";
 
@@ -47,8 +48,9 @@ const STATE_KEYS = new Set([
     "notePickerOctaves","randomRole",
     "pitchGeneratorModes","pitchGeneratorRoles","pitchGeneratorStyles",
     "resolume","memory",
-    "activeShaderId","visualPresets","visualEnabled","visualAspect","visualAspectWidth","visualAspectHeight",
-    "projectName"
+        "activeShaderId","visualPresets","visualEnabled","visualAspect","visualAspectWidth","visualAspectHeight",
+        "canvasWidth","canvasHeight",
+        "visualMode","projectName"
 ]);
 
 export function normalizeState(saved) {
@@ -60,9 +62,9 @@ export function normalizeState(saved) {
         presetTrackRates: createPresetTrackRates(),
         mixer: createMixerDefaults(),
         drumSound: "default",
-        bassSound: "hard-bass",
-        melodySound: "vintage",
-        otherSound: "bass",
+        bassSound: "default",
+        melodySound: "default",
+        otherSound: "moog",
         activeBanks: createSelectorMap(0),
         activeSlots: createSelectorMap(0),
         presetLoopLengths: createPresetLoopLengths(),
@@ -99,6 +101,9 @@ export function normalizeState(saved) {
         visualAspect: "fill",
         visualAspectWidth: 1920,
         visualAspectHeight: 1080,
+        canvasWidth: 0,
+        canvasHeight: 0,
+        visualMode: "hydra",
     };
 
     if (!saved || typeof saved !== "object") return { ...defaults, ...shaderDefaults };
@@ -167,9 +172,21 @@ export function normalizeState(saved) {
         internalAudio: normalizeBooleanMap(saved.internalAudio, defaults.internalAudio),
         mixer: normalizeMixer(saved.mixer, defaults.mixer),
         drumSound: DRUM_SOUND_STYLES.includes(saved.drumSound) ? saved.drumSound : defaults.drumSound,
-        bassSound: BASS_SOUND_STYLES.includes(saved.bassSound) ? saved.bassSound : defaults.bassSound,
-        melodySound: MELODY_SOUND_STYLES.includes(saved.melodySound) ? saved.melodySound : defaults.melodySound,
-        otherSound: OTHER_SOUND_STYLES.includes(saved.otherSound) ? saved.otherSound : defaults.otherSound,
+        bassSound: BASS_SOUND_STYLES.includes(saved.bassSound) ? saved.bassSound : (
+            BASS_SOUND_STYLES.includes(resolveLegacySoundStyle("bass", saved.bassSound))
+            ? resolveLegacySoundStyle("bass", saved.bassSound)
+            : defaults.bassSound
+        ),
+        melodySound: MELODY_SOUND_STYLES.includes(saved.melodySound) ? saved.melodySound : (
+            MELODY_SOUND_STYLES.includes(resolveLegacySoundStyle("melody", saved.melodySound))
+            ? resolveLegacySoundStyle("melody", saved.melodySound)
+            : defaults.melodySound
+        ),
+        otherSound: OTHER_SOUND_STYLES.includes(saved.otherSound) ? saved.otherSound : (
+            OTHER_SOUND_STYLES.includes(resolveLegacySoundStyle("other", saved.otherSound))
+            ? resolveLegacySoundStyle("other", saved.otherSound)
+            : defaults.otherSound
+        ),
         drumRandomGenre: isDrumGenreId(saved.drumRandomGenre) ? saved.drumRandomGenre : defaults.drumRandomGenre,
         noteScale: isScaleId(saved.noteScale) ? saved.noteScale : defaults.noteScale,
         noteRoot: MIDI_NOTE_NAMES.includes(saved.noteRoot) ? saved.noteRoot : defaults.noteRoot,
@@ -191,11 +208,14 @@ export function normalizeState(saved) {
         otherFollowPage: typeof saved.otherFollowPage === "boolean" ? saved.otherFollowPage : defaults.otherFollowPage,
         tieMode: normalizeTieMode(saved.tieMode, defaults.tieMode),
         activeShaderId: typeof saved.activeShaderId === "string" ? saved.activeShaderId : shaderDefaults.activeShaderId,
+        visualMode: ["isf", "hydra", "hybrid"].includes(saved.visualMode) ? saved.visualMode : shaderDefaults.visualMode,
         visualPresets: normalizeVisualPresets(saved.visualPresets, shaderDefaults.visualPresets),
         visualEnabled: typeof saved.visualEnabled === "boolean" ? saved.visualEnabled : shaderDefaults.visualEnabled,
         visualAspect: ["fill", "16-9", "4-3", "1-1", "9-16", "custom"].includes(saved.visualAspect) ? saved.visualAspect : shaderDefaults.visualAspect,
         visualAspectWidth: Number.isFinite(Number(saved.visualAspectWidth)) ? Math.round(Number(saved.visualAspectWidth)) : shaderDefaults.visualAspectWidth,
         visualAspectHeight: Number.isFinite(Number(saved.visualAspectHeight)) ? Math.round(Number(saved.visualAspectHeight)) : shaderDefaults.visualAspectHeight,
+        canvasWidth: Number.isFinite(Number(saved.canvasWidth)) ? Math.max(0, Math.round(Number(saved.canvasWidth))) : shaderDefaults.canvasWidth,
+        canvasHeight: Number.isFinite(Number(saved.canvasHeight)) ? Math.max(0, Math.round(Number(saved.canvasHeight))) : shaderDefaults.canvasHeight,
     };
 }
 
@@ -335,13 +355,22 @@ function normalizeVisualPresets(saved, defaults) {
         if (!item || typeof item !== "object") return defaults[i] ?? null;
         return {
             shaderId: typeof item.shaderId === "string" ? item.shaderId : null,
+            shaderSource: typeof item.shaderSource === "string" ? item.shaderSource : null,
+            shaderName: typeof item.shaderName === "string" ? item.shaderName : null,
             params: item.params && typeof item.params === "object" ? { ...item.params } : {},
             skipVisual: item.skipVisual === true,
+            hydraCode: typeof item.hydraCode === "string" ? item.hydraCode : "",
+            hydraParams: item.hydraParams && typeof item.hydraParams === "object" ? { ...item.hydraParams } : null,
         };
     });
 }
 
+let _prevCachedSerialized = null;
+
 export function saveState(state, onSync) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    const serialized = JSON.stringify(state);
+    if (serialized === _prevCachedSerialized) return;
+    _prevCachedSerialized = serialized;
+    localStorage.setItem(STORAGE_KEY, serialized);
     onSync?.();
 }

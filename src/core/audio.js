@@ -1,5 +1,4 @@
 import { noteToFrequency } from "./utils.js";
-import { resolveSoundStyle } from "./pattern-store.js";
 
 export class AudioEngine {
     constructor() {
@@ -101,7 +100,7 @@ export class AudioEngine {
         voice.gain.gain.cancelScheduledValues(now);
         voice.gain.gain.setValueAtTime(voice.gain.gain.value, now);
         voice.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
-        try { voice.osc.stop(now + 0.06); } catch {}
+        try { voice.osc.stop(now + 0.06); } catch (e) { console.warn("AudioEngine: stop failed", e); }
         this._activeVoices[kind] = null;
     }
 
@@ -124,10 +123,9 @@ export class AudioEngine {
         if (voice === "hat-open") this.hat(0.18, 5200, when);
     }
 
-    playBass(noteName, style = "hard-bass", when) {
+    playBass(noteName, style = "default", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("bass");
-        style = resolveSoundStyle("bass", style);
         if (style === "sub") return this.playSubBass(noteName, when);
         if (style === "acid") return this.playAcidBass(noteName, when);
         if (style === "pluck") return this.playPluckBass(noteName, when);
@@ -286,10 +284,9 @@ export class AudioEngine {
         oscB.stop(now + 0.22);
     }
 
-    playMelody(noteName, style = "vintage", when) {
+    playMelody(noteName, style = "default", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("melody");
-        style = resolveSoundStyle("melody", style);
         if (style === "bell") return this.playBellMelody(noteName, when);
         if (style === "lead") return this.playLeadMelody(noteName, when);
         if (style === "pad") return this.playPadMelody(noteName, when);
@@ -386,10 +383,9 @@ export class AudioEngine {
         oscB.stop(now + 1.2);
     }
 
-    playOther(noteName, style = "bass", when) {
+    playOther(noteName, style = "moog", when) {
         if (!this.ctx) return;
         this.activeOutput = this.channel("other");
-        style = resolveSoundStyle("other", style);
         if (style === "plucky") return this.playPluckyMono(noteName, when);
         if (style === "stabby") return this.playStabbyMono(noteName, when);
         if (style === "fm") return this.playFmMono(noteName, when);

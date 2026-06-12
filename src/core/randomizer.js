@@ -945,7 +945,7 @@ function fillStructuredMono(pattern, { style = "stab", loopLength = 64, scale = 
 // ── DRUM GENRE PATTERNS ───────────────────────────
 // Setiap genre punya: 3 varian pattern, fill chance per track, ghost note chance
 
-const DRUM_GENRE_PATTERNS = {
+export const DRUM_GENRE_PATTERNS = {
     techno: {
         variants: [
             { kick: [0, 4, 8, 12], snare: [4, 12], clap: [1, 3, 5, 7, 9, 11, 13, 15], hats: [2, 6, 10, 14] },

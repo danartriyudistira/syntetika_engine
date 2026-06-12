@@ -39,5 +39,9 @@
     "electron": "^35.0.0",
     "electron-builder": "^25.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "hydra-synth": "^1.4.0",
+    "pdfkit": "^0.19.1"
+  }
 }

@@ -163,6 +163,7 @@ const FALLBACK_SHADERS = [
 export class ShaderEditor {
     constructor(options = {}) {
         this.onSwitch = options.onSwitch || (() => { });
+        this.onActivate = options.onActivate || (() => { });
         this.onShadersChange = options.onShadersChange || (() => { });
         this.aiEngine = options.aiEngine || null;
         this.previewEngine = null;
@@ -190,7 +191,9 @@ export class ShaderEditor {
         }
         try {
             await this.loadFromManifest();
-        } catch {}
+        } catch (e) {
+            console.warn("ShaderEditor: loadFromManifest failed", e);
+        }
         if (this.shaders.length === 0) {
             this.shaders = [...FALLBACK_SHADERS];
             this.activeId = this.shaders[0].id;
@@ -214,7 +217,9 @@ export class ShaderEditor {
                 if (!srcRes.ok) continue;
                 const source = await srcRes.text();
                 loaded.push({ id: entry.id, name: entry.name, source, categories: entry.categories || [] });
-            } catch {}
+            } catch (e) {
+                    console.warn("ShaderEditor: failed to load shader file", e);
+                }
         }
         if (loaded.length > 0) {
             this.shaders = loaded;
@@ -277,7 +282,9 @@ export class ShaderEditor {
                 shaders: this.shaders.map(s => ({ id: s.id, name: s.name, source: s.source })),
                 activeId: this.activeId,
             }));
-        } catch { }
+        } catch (e) {
+            console.warn("ShaderEditor: saveToStorage failed", e);
+        }
     }
 
     async _saveToShadersDir(filename, source) {
@@ -337,7 +344,9 @@ export class ShaderEditor {
                     }
                 }
             }
-        } catch { }
+        } catch (e) {
+            console.warn("ShaderEditor: loadFromStorage failed", e);
+        }
     }
 
     openEditor(shaderId, mountEl) {
@@ -571,6 +580,7 @@ export class ShaderEditor {
             const item = e.target.closest(".shader-item");
             if (item && !e.target.closest("button")) {
                 this.setActive(item.dataset.shaderId);
+                this.onActivate(item.dataset.shaderId);
                 renderList();
                 this.sync();
             }

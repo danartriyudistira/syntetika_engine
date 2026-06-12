@@ -3,19 +3,19 @@ import { DRUM_VOICE_ORDER } from "./constants.js";
 
 export const SEQUENCER_MODES = ["drum", "bass", "melody", "other"];
 export const DRUM_SOUND_STYLES = ["default", "glitch", "noise", "abstract"];
-export const BASS_SOUND_STYLES = ["hard-bass", "sub", "lead", "pad"];
-export const MELODY_SOUND_STYLES = ["vintage", "glass", "lead", "pad"];
-export const OTHER_SOUND_STYLES = ["bass", "lead", "stab", "fx"];
+export const BASS_SOUND_STYLES = ["default", "sub", "acid", "pluck"];
+export const MELODY_SOUND_STYLES = ["default", "bell", "lead", "pad"];
+export const OTHER_SOUND_STYLES = ["moog", "plucky", "stabby", "fm"];
 export { DRUM_VOICE_ORDER } from "./constants.js";
 
-// Maps new hardware-aware style names to existing audio synthesis engines
-export function resolveSoundStyle(mode, style) {
-    const modeAliases = {
-        bass: { "hard-bass": "default", "sub": "sub", "lead": "acid", "pad": "pluck" },
-        melody: { "vintage": "default", "glass": "bell", "lead": "lead", "pad": "pad" },
-        other: { "bass": "moog", "lead": "plucky", "stab": "stabby", "fx": "fm" },
-    };
-    const aliases = modeAliases[mode];
+export const LEGACY_SOUND_STYLE_MAP = {
+    bass: { "hard-bass": "default", "lead": "acid", "pad": "pluck" },
+    melody: { "vintage": "default", "glass": "bell" },
+    other: { "bass": "moog", "lead": "plucky", "stab": "stabby", "fx": "fm" },
+};
+
+export function resolveLegacySoundStyle(mode, style) {
+    const aliases = LEGACY_SOUND_STYLE_MAP[mode];
     if (aliases && aliases[style]) return aliases[style];
     return style;
 }

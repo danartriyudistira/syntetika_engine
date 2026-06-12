@@ -173,7 +173,9 @@ export class MediaManager {
                 }));
                 try {
                     localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
-                } catch {}
+                } catch (e) {
+                    console.warn("MediaManager: save fallback failed", e);
+                }
             }
         }
     }
@@ -184,6 +186,8 @@ export class MediaManager {
             if (!raw) return;
             const data = JSON.parse(raw);
             this.fromJSON(data);
-        } catch {}
+        } catch (e) {
+            console.warn("MediaManager: loadFromStorage failed", e);
+        }
     }
 }

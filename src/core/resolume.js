@@ -75,6 +75,35 @@ export class ResolumeController {
         this.pulseTimers = new Map();
         this.lastPulseAt = new Map();
         this.lastStatus = "Resolume idle";
+        this._oscQueue = [];
+        this._oscRafId = null;
+    }
+
+    _flushOsc() {
+        const queue = this._oscQueue;
+        this._oscQueue = [];
+        this._oscRafId = null;
+        if (queue.length === 0) return;
+        queue.forEach(({ address, value }) => {
+            fetch(this.config.oscBridgeUrl, {
+                method: "POST",
+                mode: "cors",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    host: this.config.oscHost,
+                    port: this.config.oscPort,
+                    address,
+                    value
+                })
+            }).catch(() => {});
+        });
+    }
+
+    _enqueueOsc(address, value) {
+        this._oscQueue.push({ address, value });
+        if (!this._oscRafId) {
+            this._oscRafId = requestAnimationFrame(() => this._flushOsc());
+        }
     }
 
     setConfig(config) {
@@ -178,12 +207,19 @@ export class ResolumeController {
         const lastPulseAt = this.lastPulseAt.get(mapping.link) || 0;
         if (debounceMs > 0 && now - lastPulseAt < debounceMs) {
             this.clearPulseTimers(key);
-            this.pulseTimers.set(key, [
-                window.setTimeout(() => {
-                    addresses.forEach((address) => this.sendOscValue(address, 0));
+            const endMs = clampNumber(Number(this.config.pulseLengthMs) || 80, 20, 1000);
+            const endTime = now + endMs;
+            let rafId;
+            const wait = () => {
+                if (performance.now() >= endTime) {
+                    addresses.forEach((address) => this._enqueueOsc(address, 0));
                     this.pulseTimers.delete(key);
-                }, clampNumber(Number(this.config.pulseLengthMs) || 80, 20, 1000))
-            ]);
+                } else {
+                    rafId = requestAnimationFrame(wait);
+                }
+            };
+            rafId = requestAnimationFrame(wait);
+            this.pulseTimers.set(key, rafId);
             return;
         }
         this.lastPulseAt.set(mapping.link, now);
@@ -194,38 +230,31 @@ export class ResolumeController {
     scheduleDecayPulse(key, addresses, amount) {
         this.clearPulseTimers(key);
         const lengthMs = clampNumber(Number(this.config.pulseLengthMs) || 120, 40, 1000);
-        const points = [
-            [0, amount],
-            [0.3, amount * 0.66],
-            [0.64, amount * 0.28],
-            [1, 0]
-        ];
-        const timers = points.map(([position, value]) => window.setTimeout(() => {
-            addresses.forEach((address) => this.sendOscValue(address, value));
-            if (position === 1) this.pulseTimers.delete(key);
-        }, Math.round(lengthMs * position)));
-        this.pulseTimers.set(key, timers);
+        const startTime = performance.now();
+        let rafId;
+        const decay = (now) => {
+            const elapsed = now - startTime;
+            const t = Math.min(elapsed / lengthMs, 1);
+            const value = amount * (1 - t * t * 0.7) * (1 - t * 0.3);
+            addresses.forEach((address) => this._enqueueOsc(address, Math.max(0, value)));
+            if (t < 1) {
+                rafId = requestAnimationFrame(decay);
+            } else {
+                this.pulseTimers.delete(key);
+            }
+        };
+        rafId = requestAnimationFrame(decay);
+        this.pulseTimers.set(key, rafId);
     }
 
     clearPulseTimers(key) {
-        const timers = this.pulseTimers.get(key);
-        if (Array.isArray(timers)) timers.forEach((timer) => window.clearTimeout(timer));
-        else window.clearTimeout(timers);
+        const id = this.pulseTimers.get(key);
+        if (id != null) cancelAnimationFrame(id);
         this.pulseTimers.delete(key);
     }
 
     sendOscValue(address, value) {
-        fetch(this.config.oscBridgeUrl, {
-            method: "POST",
-            mode: "cors",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                host: this.config.oscHost,
-                port: this.config.oscPort,
-                address,
-                value
-            })
-        }).catch(() => {});
+        this._enqueueOsc(address, value);
     }
 
     async testOscBridge() {

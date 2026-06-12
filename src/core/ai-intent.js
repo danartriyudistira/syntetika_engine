@@ -328,16 +328,16 @@ function tryGenre(input) {
 
 function trySound(input) {
     const soundMap = {
-        "acid bass": { mode: "bass", sound: "lead" },
+        "acid bass": { mode: "bass", sound: "acid" },
         "sub bass": { mode: "bass", sound: "sub" },
-        "hard bass": { mode: "bass", sound: "hard-bass" },
-        "pluck bass": { mode: "bass", sound: "pad" },
+        "default bass": { mode: "bass", sound: "default" },
+        "pluck bass": { mode: "bass", sound: "pluck" },
         "glitch": { mode: "drum", sound: "glitch" },
         "noise": { mode: "drum", sound: "noise" },
         "abstract": { mode: "drum", sound: "abstract" },
-        "moog": { mode: "other", sound: "bass" },
-        "plucky": { mode: "other", sound: "lead" },
-        "stabby": { mode: "other", sound: "stab" },
+        "moog": { mode: "other", sound: "moog" },
+        "plucky": { mode: "other", sound: "plucky" },
+        "stabby": { mode: "other", sound: "stabby" },
     };
 
     for (const [key, val] of Object.entries(soundMap)) {
@@ -346,15 +346,15 @@ function trySound(input) {
     }
 
     if (/\b(bell|bells|lonceng|glass)\b/.test(input))
-        return { type: "sound", mode: "melody", sound: "glass", confidence: 0.9 };
+        return { type: "sound", mode: "melody", sound: "bell", confidence: 0.9 };
     if (/\b(lead|leads)\b/.test(input) && !/\bmode\b/.test(input))
         return { type: "sound", mode: "melody", sound: "lead", confidence: 0.9 };
-    if (/\b(pad|pads|vintage)\b/.test(input))
-        return { type: "sound", mode: "melody", sound: "pad", confidence: 0.9 };
     if (/\b(vintage)\b/i.test(input))
-        return { type: "sound", mode: "melody", sound: "vintage", confidence: 0.8 };
+        return { type: "sound", mode: "melody", sound: "default", confidence: 0.8 };
+    if (/\b(pad|pads)\b/.test(input))
+        return { type: "sound", mode: "melody", sound: "pad", confidence: 0.9 };
     if (/\bfm\b/i.test(input))
-        return { type: "sound", mode: "other", sound: "fx", confidence: 0.7 };
+        return { type: "sound", mode: "other", sound: "fm", confidence: 0.7 };
 
     const soundPattern = input.match(/(?:change|switch|set|ganti|pakai)\s+(.+?)\s+(?:sound|style|suara)\s+(?:to|ke|:)?\s*(.+)/i);
     if (soundPattern) {
@@ -512,7 +512,7 @@ export function intentToActions(intent) {
 
         case "transport":
             if (intent.action === "play") return [{ type: ACTIONS.TOGGLE_PLAY }];
-            if (intent.action === "stop") return [{ type: ACTIONS.TOGGLE_PLAY }];
+            if (intent.action === "stop") return [{ type: ACTIONS.STOP }];
             return null;
 
         case "bpm":

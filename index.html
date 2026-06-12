@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Syntetika Engine - Offline Console</title>
     <link rel="stylesheet" href="style.css?v=20260526-neon-core-light">
+    <script src="./node_modules/hydra-synth/dist/hydra-synth.js"></script>
     <script type="module" src="app.js?v=20260526-neon-core-light"></script>
 </head>
 <body>
@@ -214,30 +215,30 @@
                          <div class="sound-panel" data-sound-panel="bass">
                              <p class="section-title sound-title">Model D Sound</p>
                              <div class="sound-row" id="bass-sound-btns" aria-label="Bass sound style">
-                                 <button class="btn-sound active" type="button" data-bass-sound="hard-bass">Hard Bass</button>
-                                 <button class="btn-sound" type="button" data-bass-sound="sub">Sub</button>
-                                 <button class="btn-sound" type="button" data-bass-sound="lead">Lead</button>
-                                 <button class="btn-sound" type="button" data-bass-sound="pad">Pad</button>
+                                  <button class="btn-sound active" type="button" data-bass-sound="default">Default</button>
+                                  <button class="btn-sound" type="button" data-bass-sound="sub">Sub</button>
+                                  <button class="btn-sound" type="button" data-bass-sound="acid">Acid</button>
+                                  <button class="btn-sound" type="button" data-bass-sound="pluck">Pluck</button>
                              </div>
                          </div>
 
                          <div class="sound-panel" data-sound-panel="melody">
                              <p class="section-title sound-title">Kobol Sound</p>
                              <div class="sound-row" id="melody-sound-btns" aria-label="Melody sound style">
-                                 <button class="btn-sound active" type="button" data-melody-sound="vintage">Vintage</button>
-                                 <button class="btn-sound" type="button" data-melody-sound="glass">Glass</button>
-                                 <button class="btn-sound" type="button" data-melody-sound="lead">Lead</button>
-                                 <button class="btn-sound" type="button" data-melody-sound="pad">Pad</button>
+                                  <button class="btn-sound active" type="button" data-melody-sound="default">Default</button>
+                                  <button class="btn-sound" type="button" data-melody-sound="bell">Bell</button>
+                                  <button class="btn-sound" type="button" data-melody-sound="lead">Lead</button>
+                                  <button class="btn-sound" type="button" data-melody-sound="pad">Pad</button>
                              </div>
                          </div>
 
                          <div class="sound-panel" data-sound-panel="other">
                              <p class="section-title sound-title">Monostation Sound</p>
                              <div class="sound-row" id="other-sound-btns" aria-label="Mono sound style">
-                                 <button class="btn-sound active" type="button" data-other-sound="bass">Bass</button>
-                                 <button class="btn-sound" type="button" data-other-sound="lead">Lead</button>
-                                 <button class="btn-sound" type="button" data-other-sound="stab">Stab</button>
-                                 <button class="btn-sound" type="button" data-other-sound="fx">FX</button>
+                                  <button class="btn-sound active" type="button" data-other-sound="moog">Moog</button>
+                                  <button class="btn-sound" type="button" data-other-sound="plucky">Plucky</button>
+                                  <button class="btn-sound" type="button" data-other-sound="stabby">Stabby</button>
+                                  <button class="btn-sound" type="button" data-other-sound="fm">FM</button>
                              </div>
                          </div>
                     </div>
@@ -440,6 +441,7 @@
                             <div class="generator-style-row" id="generator-style-btns" aria-label="Generator style"></div>
                         </div>
                     </div>
+                    <div id="midi-keyboard-overlay" class="midi-keyboard-overlay" aria-hidden="true" role="region" aria-label="MIDI Keyboard"></div>
                 </div>
 
                 
@@ -449,7 +451,7 @@
         <section id="center-panel" aria-label="Visual preview and pattern launch">
             <section id="canvas-container" aria-label="Reactive visual output">
                 <div class="canvas-aspect-wrap" id="canvas-aspect-wrap">
-                    <canvas id="visual-canvas"></canvas>
+                    <canvas id="visual-canvas" width="1920" height="1080"></canvas>
                     <div id="syntetika-logo" class="syntetika-logo" aria-label="Syntetika logo">
                         <svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg" class="logo-svg">
                             <defs>
@@ -490,6 +492,7 @@
                     <button class="monitor-badge visual-toggle" id="visual-toggle" type="button" data-visual-toggle>Visual: On</button>
                     <span class="fps-counter" id="fps-counter">-- FPS</span>
                     <button class="monitor-badge popup-visual-btn" id="popup-visual-btn" type="button">Pop Up Visual</button>
+                    <button class="monitor-badge" id="midi-kb-toggle" type="button">MIDI Keyboard</button>
                     <button class="monitor-badge" id="media-load-btn" type="button">Load Media</button>
                     <input id="media-file-input" type="file" accept="image/*" hidden>
                 </div>
@@ -508,6 +511,17 @@
                             <input id="aspect-custom-height" type="number" min="1" max="9999" value="1080" aria-label="Custom aspect height">
                         </div>
                         <button type="button" id="aspect-custom-apply">Apply Custom</button>
+                        <hr class="aspect-divider">
+                        <div class="resolution-row">
+                            <span class="resolution-label">Resolution</span>
+                            <div class="resolution-inputs">
+                                <input id="canvas-res-width" type="number" min="1" max="9999" value="0" aria-label="Canvas width">
+                                <span>×</span>
+                                <input id="canvas-res-height" type="number" min="1" max="9999" value="0" aria-label="Canvas height">
+                                <button type="button" id="canvas-res-apply" class="res-apply-btn">Set</button>
+                            </div>
+                            <span class="resolution-hint">0 = auto</span>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -517,9 +531,30 @@
         </section>
 
         <section id="right-panel" aria-label="Shader gallery and controls">
-            <div id="shader-gallery-host" class="visual-side-card"></div>
-            <div id="visual-preset-status"></div>
+            <div class="visual-tabs">
+                <button class="visual-tab active" data-visual-tab="shaders" type="button">Shaders</button>
+                <button class="visual-tab" data-visual-tab="hydra" type="button">Hydra</button>
+            </div>
+            <div class="visual-side-card visual-tab-content" data-visual-tab-content="shaders">
+                <div id="visual-preset-toolbar"></div>
+                <div id="shader-gallery-host"></div>
+            </div>
+            <div id="hydra-panel" class="visual-side-card visual-tab-content" data-visual-tab-content="hydra" hidden>
+                <div class="hydra-toolbar">
+                    <button class="btn-bar" id="hydra-run-btn" type="button">Run</button>
+                    <button class="btn-bar" id="hydra-random-btn" type="button">Random</button>
+                    <button class="btn-bar" id="hydra-clear-btn" type="button">Clear</button>
+                    <button class="btn-bar" id="hydra-save-btn" type="button">Save to Slot</button>
+                </div>
+                <label class="hydra-code-label">
+                    <span>Hydra Code</span>
+                </label>
+                <textarea id="hydra-code-editor" class="hydra-code-editor" spellcheck="false" placeholder="// Example:&#10;osc(20, 0.1, p1).rotate(p2).out()">osc(20, 0.1, p1).kaleid(p2 * 4).out()</textarea>
+                <div id="hydra-error" class="hydra-error" hidden></div>
+                <div id="hydra-params" class="hydra-params"></div>
+            </div>
         </section>
     </main>
+
 </body>
 </html>
